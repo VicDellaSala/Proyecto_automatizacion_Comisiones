@@ -3,17 +3,20 @@ import io
 import re
 import unicodedata
 import zipfile
+import os
+import shutil
+import tempfile
+import xml.etree.ElementTree as ET
 
 from copy import copy
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from openpyxl import load_workbook
 
 from reglas_comisiones import estandarizar_equipo
 
-VERSION_PROCESAMIENTO = "3.2-HOJAS-FIJAS"
+VERSION_PROCESAMIENTO = "3.3-EXPORTACION-LIGERA"
 
 
 HOJA_COMISIONES = "VENTAS"
@@ -2417,107 +2420,840 @@ def procesar_todo(
     }
 
 
-def copiar_estilo_fila(
-    ws,
-    fila_origen,
-    fila_destino,
+
+# =========================================================
+# EXPORTACIÓN XLSX DE BAJA MEMORIA
+# =========================================================
+
+_NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_NS_PKG_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+ET.register_namespace("", _NS_MAIN)
+ET.register_namespace("r", _NS_REL)
+
+
+def _columna_excel(numero):
+    """
+    1 -> A, 2 -> B, 27 -> AA
+    """
+    letras = ""
+
+    while numero:
+        numero, resto = divmod(
+            numero - 1,
+            26
+        )
+
+        letras = chr(
+            65 + resto
+        ) + letras
+
+    return letras
+
+
+def _referencia_celda(
+    columna,
+    fila,
 ):
-    if fila_origen < 1:
+    return (
+        f"{_columna_excel(columna)}"
+        f"{fila}"
+    )
+
+
+def _numero_excel_fecha(valor):
+    """
+    Convierte date/datetime/Timestamp a número serial de Excel.
+    """
+    timestamp = pd.Timestamp(
+        valor
+    )
+
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_localize(
+            None
+        )
+
+    base = pd.Timestamp(
+        "1899-12-30"
+    )
+
+    diferencia = timestamp - base
+
+    return (
+        diferencia.days
+        + diferencia.seconds / 86400
+        + diferencia.microseconds / 86400000000
+    )
+
+
+def _limpiar_contenido_celda(
+    celda
+):
+    """
+    Elimina valor/texto/fórmula dejando intacto
+    el estilo y otros atributos de la celda.
+    """
+    for hijo in list(
+        celda
+    ):
+        if hijo.tag in {
+            f"{{{_NS_MAIN}}}v",
+            f"{{{_NS_MAIN}}}is",
+            f"{{{_NS_MAIN}}}f",
+        }:
+            celda.remove(
+                hijo
+            )
+
+
+def _es_formula(
+    celda
+):
+    return (
+        celda.find(
+            f"{{{_NS_MAIN}}}f"
+        )
+        is not None
+    )
+
+
+def _es_vacio(
+    valor
+):
+    if valor is None:
+        return True
+
+    try:
+        return bool(
+            pd.isna(
+                valor
+            )
+        )
+
+    except Exception:
+        return False
+
+
+def _es_numero_real(
+    valor
+):
+    """
+    Evita convertir identificadores de texto a número.
+    Solo considera numéricos los valores que ya llegan
+    como tipos numéricos reales.
+    """
+    return isinstance(
+        valor,
+        (
+            int,
+            float,
+        )
+    ) and not isinstance(
+        valor,
+        bool
+    )
+
+
+def _es_fecha_real(
+    valor
+):
+    return isinstance(
+        valor,
+        (
+            datetime,
+            pd.Timestamp,
+        )
+    )
+
+
+def _escribir_valor_xml(
+    celda,
+    valor,
+):
+    """
+    Escribe un valor en una celda XLSX usando XML directo.
+
+    Los textos se escriben como inlineStr para evitar tocar
+    sharedStrings.xml. Eso reduce mucho el uso de memoria.
+    """
+    _limpiar_contenido_celda(
+        celda
+    )
+
+    if _es_vacio(
+        valor
+    ):
+        celda.attrib.pop(
+            "t",
+            None
+        )
+
         return
 
-    for col in range(
-        1,
-        ws.max_column + 1
+    if isinstance(
+        valor,
+        bool
     ):
-        origen = ws.cell(
-            row=fila_origen,
-            column=col
+        celda.set(
+            "t",
+            "b"
         )
 
-        destino = ws.cell(
-            row=fila_destino,
-            column=col
+        nodo_v = ET.SubElement(
+            celda,
+            f"{{{_NS_MAIN}}}v"
         )
 
-        if origen.has_style:
-            destino._style = copy(
-                origen._style
-            )
-
-        destino.number_format = (
-            origen.number_format
+        nodo_v.text = (
+            "1"
+            if valor
+            else "0"
         )
 
-        if origen.font:
-            destino.font = copy(
-                origen.font
+        return
+
+    if _es_fecha_real(
+        valor
+    ):
+        celda.attrib.pop(
+            "t",
+            None
+        )
+
+        nodo_v = ET.SubElement(
+            celda,
+            f"{{{_NS_MAIN}}}v"
+        )
+
+        nodo_v.text = str(
+            _numero_excel_fecha(
+                valor
+            )
+        )
+
+        return
+
+    if _es_numero_real(
+        valor
+    ):
+        celda.attrib.pop(
+            "t",
+            None
+        )
+
+        nodo_v = ET.SubElement(
+            celda,
+            f"{{{_NS_MAIN}}}v"
+        )
+
+        nodo_v.text = str(
+            valor
+        )
+
+        return
+
+    # Todo lo demás se conserva como texto.
+    celda.set(
+        "t",
+        "inlineStr"
+    )
+
+    nodo_is = ET.SubElement(
+        celda,
+        f"{{{_NS_MAIN}}}is"
+    )
+
+    nodo_t = ET.SubElement(
+        nodo_is,
+        f"{{{_NS_MAIN}}}t"
+    )
+
+    texto = str(
+        valor
+    )
+
+    if (
+        texto.startswith(" ")
+        or texto.endswith(" ")
+        or "\n" in texto
+        or "\t" in texto
+    ):
+        nodo_t.set(
+            "{http://www.w3.org/XML/1998/namespace}space",
+            "preserve"
+        )
+
+    nodo_t.text = texto
+
+
+def _ruta_xml_hoja(
+    zip_entrada,
+    nombre_hoja,
+):
+    """
+    Resuelve el archivo XML real correspondiente
+    a una hoja por su nombre.
+    """
+    workbook_xml = ET.fromstring(
+        zip_entrada.read(
+            "xl/workbook.xml"
+        )
+    )
+
+    hojas = workbook_xml.find(
+        f"{{{_NS_MAIN}}}sheets"
+    )
+
+    if hojas is None:
+        raise ValueError(
+            "El archivo de Comisiones "
+            "no contiene hojas de Excel."
+        )
+
+    relacion_id = None
+
+    for hoja in hojas:
+        if hoja.get(
+            "name"
+        ) == nombre_hoja:
+            relacion_id = hoja.get(
+                f"{{{_NS_REL}}}id"
             )
 
-        if origen.fill:
-            destino.fill = copy(
-                origen.fill
+            break
+
+    if not relacion_id:
+        raise ValueError(
+            f"No encontré la hoja "
+            f"'{nombre_hoja}' en el libro."
+        )
+
+    rels_xml = ET.fromstring(
+        zip_entrada.read(
+            "xl/_rels/workbook.xml.rels"
+        )
+    )
+
+    objetivo = None
+
+    for relacion in rels_xml:
+        if relacion.get(
+            "Id"
+        ) == relacion_id:
+            objetivo = relacion.get(
+                "Target"
             )
 
-        if origen.border:
-            destino.border = copy(
-                origen.border
+            break
+
+    if not objetivo:
+        raise ValueError(
+            f"No pude localizar el XML "
+            f"de la hoja '{nombre_hoja}'."
+        )
+
+    objetivo = objetivo.replace(
+        "\\",
+        "/"
+    )
+
+    if objetivo.startswith(
+        "/"
+    ):
+        ruta = objetivo.lstrip(
+            "/"
+        )
+
+    elif objetivo.startswith(
+        "xl/"
+    ):
+        ruta = objetivo
+
+    else:
+        ruta = (
+            "xl/"
+            + objetivo.lstrip(
+                "/"
+            )
+        )
+
+    # Normalizar posibles ../
+    ruta = os.path.normpath(
+        ruta
+    ).replace(
+        "\\",
+        "/"
+    )
+
+    return ruta
+
+
+def _buscar_o_crear_fila(
+    sheet_data,
+    numero_fila,
+):
+    """
+    Devuelve la fila indicada. Si no existe, la crea
+    manteniendo el orden por número de fila.
+    """
+    filas = sheet_data.findall(
+        f"{{{_NS_MAIN}}}row"
+    )
+
+    for fila in filas:
+        actual = int(
+            fila.get(
+                "r",
+                "0"
+            )
+        )
+
+        if actual == numero_fila:
+            return fila
+
+    nueva = ET.Element(
+        f"{{{_NS_MAIN}}}row",
+        {
+            "r":
+                str(
+                    numero_fila
+                )
+        }
+    )
+
+    insertado = False
+
+    for posicion, fila in enumerate(
+        filas
+    ):
+        actual = int(
+            fila.get(
+                "r",
+                "0"
+            )
+        )
+
+        if actual > numero_fila:
+            sheet_data.insert(
+                posicion,
+                nueva
             )
 
-        if origen.alignment:
-            destino.alignment = copy(
-                origen.alignment
+            insertado = True
+            break
+
+    if not insertado:
+        sheet_data.append(
+            nueva
+        )
+
+    return nueva
+
+
+def _buscar_o_crear_celda(
+    fila_xml,
+    numero_columna,
+    numero_fila,
+):
+    referencia = _referencia_celda(
+        numero_columna,
+        numero_fila
+    )
+
+    for celda in fila_xml.findall(
+        f"{{{_NS_MAIN}}}c"
+    ):
+        if celda.get(
+            "r"
+        ) == referencia:
+            return celda
+
+    nueva = ET.Element(
+        f"{{{_NS_MAIN}}}c",
+        {
+            "r":
+                referencia
+        }
+    )
+
+    # Insertar respetando orden de columnas.
+    insertado = False
+
+    for posicion, celda in enumerate(
+        fila_xml.findall(
+            f"{{{_NS_MAIN}}}c"
+        )
+    ):
+        ref = celda.get(
+            "r",
+            ""
+        )
+
+        letras = re.sub(
+            r"\d",
+            "",
+            ref
+        )
+
+        numero_actual = 0
+
+        for letra in letras:
+            numero_actual = (
+                numero_actual * 26
+                + ord(
+                    letra.upper()
+                )
+                - 64
             )
 
-        if origen.protection:
-            destino.protection = copy(
-                origen.protection
+        if numero_actual > numero_columna:
+            fila_xml.insert(
+                posicion,
+                nueva
             )
+
+            insertado = True
+            break
+
+    if not insertado:
+        fila_xml.append(
+            nueva
+        )
+
+    return nueva
+
+
+def _copiar_estilo_fila_xml(
+    fila_origen,
+    fila_destino,
+    numero_fila_destino,
+):
+    """
+    Copia atributos de fila y estilos de celdas
+    sin copiar valores ni fórmulas.
+    """
+    if fila_origen is None:
+        return
+
+    for clave, valor in fila_origen.attrib.items():
+        if clave != "r":
+            fila_destino.set(
+                clave,
+                valor
+            )
+
+    for celda_origen in fila_origen.findall(
+        f"{{{_NS_MAIN}}}c"
+    ):
+        referencia = celda_origen.get(
+            "r",
+            ""
+        )
+
+        letras = re.sub(
+            r"\d",
+            "",
+            referencia
+        )
+
+        if not letras:
+            continue
+
+        numero_columna = 0
+
+        for letra in letras:
+            numero_columna = (
+                numero_columna * 26
+                + ord(
+                    letra.upper()
+                )
+                - 64
+            )
+
+        celda_destino = _buscar_o_crear_celda(
+            fila_destino,
+            numero_columna,
+            numero_fila_destino,
+        )
+
+        estilo = celda_origen.get(
+            "s"
+        )
+
+        if estilo is not None:
+            celda_destino.set(
+                "s",
+                estilo
+            )
+
+
+def _actualizar_dimension_hoja(
+    raiz,
+    ultima_fila,
+    ultima_columna,
+):
+    dimension = raiz.find(
+        f"{{{_NS_MAIN}}}dimension"
+    )
+
+    if dimension is None:
+        return
+
+    ref_actual = dimension.get(
+        "ref",
+        "A1"
+    )
+
+    inicio = (
+        ref_actual.split(
+            ":"
+        )[0]
+    )
+
+    fin = (
+        f"{_columna_excel(ultima_columna)}"
+        f"{ultima_fila}"
+    )
+
+    dimension.set(
+        "ref",
+        f"{inicio}:{fin}"
+    )
+
+
+def _crear_xml_ventas_actualizado(
+    xml_original,
+    final,
+    cantidad_original,
+):
+    """
+    Modifica solo sheetData de la hoja VENTAS.
+    El resto del XML se conserva.
+    """
+    raiz = ET.fromstring(
+        xml_original
+    )
+
+    sheet_data = raiz.find(
+        f"{{{_NS_MAIN}}}sheetData"
+    )
+
+    if sheet_data is None:
+        raise ValueError(
+            "La hoja VENTAS no tiene "
+            "una sección sheetData válida."
+        )
+
+    columnas_excel = [
+        columna
+        for columna in final.columns
+        if not str(
+            columna
+        ).startswith(
+            "__"
+        )
+    ]
+
+    if not columnas_excel:
+        raise ValueError(
+            "No hay columnas públicas "
+            "para escribir en VENTAS."
+        )
+
+    primera_fila_datos = 2
+
+    # Buscar fila plantilla: preferimos la última fila original.
+    fila_plantilla = None
+
+    numero_plantilla = (
+        primera_fila_datos
+        + max(
+            cantidad_original - 1,
+            0
+        )
+    )
+
+    for fila in sheet_data.findall(
+        f"{{{_NS_MAIN}}}row"
+    ):
+        if int(
+            fila.get(
+                "r",
+                "0"
+            )
+        ) == numero_plantilla:
+            fila_plantilla = fila
+            break
+
+    # Si no existe, usar primera fila de datos disponible.
+    if fila_plantilla is None:
+        for fila in sheet_data.findall(
+            f"{{{_NS_MAIN}}}row"
+        ):
+            numero = int(
+                fila.get(
+                    "r",
+                    "0"
+                )
+            )
+
+            if numero >= primera_fila_datos:
+                fila_plantilla = fila
+                break
+
+    # -----------------------------------------------------
+    # FILAS EXISTENTES
+    # -----------------------------------------------------
+
+    limite_existentes = min(
+        cantidad_original,
+        len(
+            final
+        )
+    )
+
+    for indice in range(
+        limite_existentes
+    ):
+        numero_fila = (
+            primera_fila_datos
+            + indice
+        )
+
+        fila_xml = _buscar_o_crear_fila(
+            sheet_data,
+            numero_fila,
+        )
+
+        registro = final.iloc[
+            indice
+        ]
+
+        for posicion, columna_df in enumerate(
+            columnas_excel,
+            start=1,
+        ):
+            celda = _buscar_o_crear_celda(
+                fila_xml,
+                posicion,
+                numero_fila,
+            )
+
+            # Regla acordada: no destruir fórmulas existentes.
+            if _es_formula(
+                celda
+            ):
+                continue
+
+            _escribir_valor_xml(
+                celda,
+                registro.get(
+                    columna_df
+                ),
+            )
+
+    # -----------------------------------------------------
+    # FILAS NUEVAS
+    # -----------------------------------------------------
+
+    for indice in range(
+        cantidad_original,
+        len(
+            final
+        )
+    ):
+        numero_fila = (
+            primera_fila_datos
+            + indice
+        )
+
+        fila_xml = _buscar_o_crear_fila(
+            sheet_data,
+            numero_fila,
+        )
+
+        _copiar_estilo_fila_xml(
+            fila_plantilla,
+            fila_xml,
+            numero_fila,
+        )
+
+        registro = final.iloc[
+            indice
+        ]
+
+        for posicion, columna_df in enumerate(
+            columnas_excel,
+            start=1,
+        ):
+            celda = _buscar_o_crear_celda(
+                fila_xml,
+                posicion,
+                numero_fila,
+            )
+
+            _escribir_valor_xml(
+                celda,
+                registro.get(
+                    columna_df
+                ),
+            )
+
+    ultima_fila = max(
+        1,
+        primera_fila_datos
+        + len(
+            final
+        )
+        - 1,
+    )
+
+    _actualizar_dimension_hoja(
+        raiz,
+        ultima_fila,
+        len(
+            columnas_excel
+        ),
+    )
+
+    return ET.tostring(
+        raiz,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
 
 
 def generar_excel_resultado(
     resultados
 ):
     """
-    Conserva el libro original y sus otras hojas.
+    GENERADOR DE BAJA MEMORIA.
 
-    Para las filas que ya existían:
-    - conserva fórmulas existentes;
-    - actualiza únicamente celdas normales.
+    No abre el libro completo con openpyxl.
 
-    Para las ventas nuevas:
-    - agrega filas al final de la hoja VENTAS;
-    - copia el estilo de la última fila existente.
+    El XLSX es un ZIP. Esta función:
+    1. parte de los bytes del mismo archivo original;
+    2. copia todas las partes/hojas sin cargarlas completas;
+    3. modifica solamente el XML de la hoja VENTAS;
+    4. conserva las demás hojas, vínculos, estilos y objetos.
+
+    Esto evita descomprimir en RAM vínculos externos gigantes
+    que pueden hacer caer Streamlit.
     """
     datos_originales = resultados[
         "bytes_comisiones_original"
     ]
-
-    wb = load_workbook(
-        io.BytesIO(
-            datos_originales
-        ),
-        keep_links=True,
-    )
 
     hoja = resultados.get(
         "hoja_comisiones",
         HOJA_COMISIONES
     )
 
-    if hoja not in wb.sheetnames:
-        raise ValueError(
-            f"No encontré la hoja "
-            f"'{hoja}' al preparar "
-            f"el Excel final."
-        )
-
-    ws = wb[
-        hoja
-    ]
-
     final = resultados[
         "final"
-    ].copy()
+    ]
 
     cantidad_original = int(
         resultados[
@@ -2525,141 +3261,104 @@ def generar_excel_resultado(
         ]
     )
 
-    # pandas devuelve las columnas en el mismo orden
-    # del Excel. Eso es importante porque el archivo
-    # real tiene encabezados repetidos como SERIAL
-    # y CONCATENAR.
-    columnas_excel = [
-        col
-        for col in final.columns
-        if not str(
-            col
-        ).startswith("__")
-    ]
-
-    # La hoja real tiene cabecera en fila 1.
-    fila_encabezado = 1
-    primera_fila_datos = 2
-
-    max_columnas_escribir = min(
-        len(columnas_excel),
-        ws.max_column
+    archivo_entrada = tempfile.NamedTemporaryFile(
+        suffix=".xlsx",
+        delete=False,
     )
 
-    # -----------------------------------------------------
-    # 1. ACTUALIZAR FILAS EXISTENTES
-    # -----------------------------------------------------
+    archivo_salida = tempfile.NamedTemporaryFile(
+        suffix=".xlsx",
+        delete=False,
+    )
 
-    for indice in range(
-        min(
-            cantidad_original,
-            len(final)
-        )
-    ):
-        fila_excel = (
-            primera_fila_datos
-            + indice
-        )
+    ruta_entrada = archivo_entrada.name
+    ruta_salida = archivo_salida.name
 
-        registro = final.iloc[
-            indice
-        ]
+    archivo_entrada.close()
+    archivo_salida.close()
 
-        for posicion in range(
-            max_columnas_escribir
+    try:
+        with open(
+            ruta_entrada,
+            "wb"
+        ) as f:
+            f.write(
+                datos_originales
+            )
+
+        with zipfile.ZipFile(
+            ruta_entrada,
+            "r"
+        ) as zip_entrada:
+
+            ruta_hoja = _ruta_xml_hoja(
+                zip_entrada,
+                hoja,
+            )
+
+            xml_hoja_original = zip_entrada.read(
+                ruta_hoja
+            )
+
+            xml_hoja_nuevo = _crear_xml_ventas_actualizado(
+                xml_hoja_original,
+                final,
+                cantidad_original,
+            )
+
+            with zipfile.ZipFile(
+                ruta_salida,
+                "w",
+            ) as zip_salida:
+
+                for info in zip_entrada.infolist():
+
+                    # La hoja VENTAS se reemplaza por
+                    # nuestra versión actualizada.
+                    if info.filename == ruta_hoja:
+                        zip_salida.writestr(
+                            info,
+                            xml_hoja_nuevo,
+                        )
+
+                        continue
+
+                    # Copiar el resto de partes de forma
+                    # STREAMING. Muy importante para archivos
+                    # con vínculos externos enormes.
+                    with zip_entrada.open(
+                        info,
+                        "r"
+                    ) as origen:
+
+                        with zip_salida.open(
+                            info,
+                            "w"
+                        ) as destino:
+
+                            shutil.copyfileobj(
+                                origen,
+                                destino,
+                                length=
+                                    1024 * 1024,
+                            )
+
+        with open(
+            ruta_salida,
+            "rb"
+        ) as f:
+            return f.read()
+
+    finally:
+        for ruta in (
+            ruta_entrada,
+            ruta_salida,
         ):
-            columna_df = columnas_excel[
-                posicion
-            ]
-
-            celda = ws.cell(
-                row=fila_excel,
-                column=posicion + 1
-            )
-
-            # No destruir fórmulas existentes.
-            if celda.data_type == "f":
-                continue
-
-            valor = registro.get(
-                columna_df
-            )
-
             try:
-                if pd.isna(valor):
-                    valor = None
-            except Exception:
+                os.remove(
+                    ruta
+                )
+
+            except OSError:
                 pass
 
-            celda.value = valor
-
-    # -----------------------------------------------------
-    # 2. AGREGAR VENTAS NUEVAS
-    # -----------------------------------------------------
-
-    fila_ultima_original = (
-        primera_fila_datos
-        + cantidad_original
-        - 1
-    )
-
-    if fila_ultima_original < primera_fila_datos:
-        fila_ultima_original = (
-            primera_fila_datos
-        )
-
-    for indice in range(
-        cantidad_original,
-        len(final)
-    ):
-        fila_excel = (
-            primera_fila_datos
-            + indice
-        )
-
-        # Copiar formato de la última fila original.
-        if ws.max_row >= 2:
-            copiar_estilo_fila(
-                ws,
-                min(
-                    fila_ultima_original,
-                    ws.max_row
-                ),
-                fila_excel,
-            )
-
-        registro = final.iloc[
-            indice
-        ]
-
-        for posicion in range(
-            max_columnas_escribir
-        ):
-            columna_df = columnas_excel[
-                posicion
-            ]
-
-            valor = registro.get(
-                columna_df
-            )
-
-            try:
-                if pd.isna(valor):
-                    valor = None
-            except Exception:
-                pass
-
-            ws.cell(
-                row=fila_excel,
-                column=posicion + 1
-            ).value = valor
-
-    salida = io.BytesIO()
-
-    wb.save(
-        salida
-    )
-
-    salida.seek(0)
-
-    return salida.getvalue()
