@@ -880,50 +880,89 @@ if "resultados" in st.session_state:
         "conserva el libro original."
     )
 
+# =====================================================
+# 8. PREPARAR Y DESCARGAR EXCEL
+# =====================================================
 
-    # =====================================================
-    # 8. DESCARGA
-    # =====================================================
+st.subheader(
+    "8. Descargar archivo final"
+)
 
-    try:
-        excel_final = generar_excel_resultado(
-            resultados
-        )
-
-        st.download_button(
-            "Descargar archivo de Comisiones actualizado",
-            data=
-                excel_final,
-
-            file_name=
-                "Comisiones_Actualizadas.xlsx",
-
-            mime=(
-                "application/vnd.openxmlformats-"
-                "officedocument.spreadsheetml.sheet"
-            ),
-
-            type="primary",
-            use_container_width=True,
-        )
-
-        st.success(
-            "La descarga parte del mismo "
-            "archivo de Comisiones y conserva "
-            "las demás hojas."
-        )
-
-    except Exception as error:
-        st.error(
-            "No se pudo preparar "
-            "el Excel final."
-        )
-
-        st.exception(
-            error
-        )
+st.info(
+    "Para ahorrar memoria, el Excel final "
+    "solo se prepara cuando pulses el botón."
+)
 
 
+if "excel_final_generado" not in st.session_state:
+
+    if st.button(
+        "Preparar archivo para descargar",
+        type="primary",
+        use_container_width=True,
+    ):
+
+        try:
+
+            with st.spinner(
+                "Preparando el archivo de Comisiones..."
+            ):
+
+                excel_final = generar_excel_resultado(
+                    resultados
+                )
+
+                st.session_state[
+                    "excel_final_generado"
+                ] = excel_final
+
+            st.success(
+                "Archivo preparado correctamente."
+            )
+
+            st.rerun()
+
+        except Exception as error:
+
+            st.error(
+                "No se pudo preparar el Excel final."
+            )
+
+            st.exception(
+                error
+            )
+
+
+if "excel_final_generado" in st.session_state:
+
+    st.success(
+        "El archivo está listo para descargar."
+    )
+
+    st.download_button(
+        "Descargar archivo de Comisiones actualizado",
+        data=st.session_state[
+            "excel_final_generado"
+        ],
+        file_name="Comisiones_Actualizadas.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-"
+            "officedocument.spreadsheetml.sheet"
+        ),
+        type="primary",
+        use_container_width=True,
+    )
+
+    if st.button(
+        "Volver a preparar el archivo",
+        use_container_width=True,
+    ):
+
+        del st.session_state[
+            "excel_final_generado"
+        ]
+
+        st.rerun()
 # =========================================================
 # REINICIAR
 # =========================================================
