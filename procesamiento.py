@@ -13,6 +13,8 @@ from openpyxl import load_workbook
 
 from reglas_comisiones import estandarizar_equipo
 
+VERSION_PROCESAMIENTO = "3.0-NUEVO"
+
 
 HOJA_COMISIONES = "VENTAS"
 

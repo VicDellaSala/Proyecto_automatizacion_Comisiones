@@ -4,6 +4,7 @@ from procesamiento import (
     procesar_todo,
     recalcular_comisiones,
     generar_excel_resultado,
+    VERSION_PROCESAMIENTO,
 )
 
 from reglas_comisiones import PRECIOS_BASE
@@ -90,6 +91,10 @@ st.write(
 
 st.caption(
     f"Versión del proyecto: {VERSION_APP}"
+)
+
+st.caption(
+    f"Versión del proyecto: {VERSION_PROCESAMIENTO}"
 )
 
 st.divider()
