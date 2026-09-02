@@ -94,7 +94,7 @@ st.caption(
 )
 
 st.caption(
-    f"Versión del proyecto: {VERSION_PROCESAMIENTO}"
+    f"Versión de procesamiento.py: {VERSION_PROCESAMIENTO}"
 )
 
 st.divider()
@@ -675,10 +675,31 @@ if "resultados" in st.session_state:
             if columna in columnas_visibles
         ]
 
+        tabla_revision = problemas[
+            columnas_visibles
+        ].copy()
+
+        for columna in tabla_revision.columns:
+
+            if columna == "Eliminar":
+                continue
+
+            if columna == "__ROW_ID":
+                continue
+
+            tabla_revision[
+                columna
+            ] = (
+                tabla_revision[
+                    columna
+                ]
+                .astype("string")
+                .fillna("")
+            )
+
+
         editado = st.data_editor(
-            problemas[
-                columnas_visibles
-            ],
+            tabla_revision,
             hide_index=True,
             use_container_width=True,
             num_rows="fixed",
@@ -828,12 +849,27 @@ if "resultados" in st.session_state:
         ).startswith("__")
     ]
 
+    vista_previa = final[
+        columnas_publicas
+    ].head(
+        200
+    ).copy()
+
+    for columna in vista_previa.columns:
+
+        vista_previa[
+            columna
+        ] = (
+            vista_previa[
+                columna
+            ]
+            .astype("string")
+            .fillna("")
+        )
+
+
     st.dataframe(
-        final[
-            columnas_publicas
-        ].head(
-            200
-        ),
+        vista_previa,
         hide_index=True,
         use_container_width=True,
     )
