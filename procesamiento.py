@@ -4,3120 +4,728 @@ import re
 import unicodedata
 import zipfile
 
-from datetime import datetime
-from datetime import timedelta
+from copy import copy
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-
-from reglas_comisiones import (
-    estandarizar_equipo,
-)
-
-
-# =========================================================
-# NOMBRES POSIBLES DE COLUMNAS
-# =========================================================
+from openpyxl import load_workbook
+from reglas_comisiones import estandarizar_equipo
 
 ALIASES = {
-
-    "pertenencia": [
-        "PERTENENCIA",
-    ],
-
-    "afipos": [
-        "AFIPOS",
-        "AFI POS",
-        "AFI_POS",
-    ],
-
-    "afiliado": [
-        "AFILIADO",
-        "AFILIACION",
-        "AFILIACIÓN",
-        "COD AFILIADO",
-        "CODIGO AFILIADO",
-        "CÓDIGO AFILIADO",
-        "NUMERO AFILIADO",
-        "NRO AFILIADO",
-    ],
-
-    "terminal": [
-        "TERMINAL",
-        "NRO TERMINAL",
-        "NUMERO TERMINAL",
-        "NÚMERO TERMINAL",
-    ],
-
-    "serial": [
-        "SERIAL",
-        "SERIALES",
-        "SERIAL EQUIPO",
-        "SERIAL_EQUIPO",
-    ],
-
-    "monto_tx": [
-        "MONTO_TRANS_ACUM_MES",
-        "MONTO TRANS ACUM MES",
-        "MONTO_TRANSACCION_BS_ACUM_MES",
-        "MONTO TRANSACCION BS ACUM MES",
-        "MONTO_TRANS_BS_ACUM_MES",
-        "MONTO TX",
-        "MONTO_TX",
-    ],
-
-    "concatenar": [
-        "CONCATENAR",
-        "CONCATENADO",
-        "AFILIADO TERMINAL",
-        "AFILIADO+TERMINAL",
-    ],
-
-    "equipo": [
-        "EQUIPO",
-        "MODELO",
-        "TIPO EQUIPO",
-        "MODELO EQUIPO",
-        "PRODUCTO",
-    ],
-
-    "estatus": [
-        "PENDIENTE",
-        "ESTATUS",
-        "STATUS",
-        "ESTADO",
-    ],
-
-    "canal": [
-        "CANAL DE VENTAS",
-        "CANAL DE VENTA",
-        "CANAL DE VENTAS (JORNADA QUE PERTENECE)",
-        "CANAL",
-        "REGION",
-        "REGIÓN",
-    ],
-
-    "vendedor_agente": [
-        "VENDEDOR AGENTE AUTORIZADOS",
-        "VENDEDOR AGENTE AUTORIZADO",
-        "VENDEDOR/AGENTE AUTORIZADO",
-        "VENDEDOR",
-        "AGENTE AUTORIZADO",
-    ],
-
-    "preafiliado": [
-        "PRE AFILIADO",
-        "PRE-AFILIADO",
-        "PREAFILIADO",
-        "PRE AFILIACION",
-        "PRE-AFILIACION",
-    ],
-
-    "ag_autorizado_flag": [
-        "AG AUTORIZADO",
-        "AGENTE AUTORIZADO?",
-        "ES AGENTE AUTORIZADO",
-    ],
-
-    "access": [
-        "ACCESS COMMERCE",
-        "ACCESS COMERCE",
-        "ACCESS",
-        "AFILIADO ACCESS",
-    ],
-
-    "con_tx": [
-        "CON TX",
-        "CON_TX",
-        "ESTADO TX",
-        "ESTATUS TX",
-    ],
-
+    "pertenencia": ["PERTENENCIA"],
+    "afipos": ["AFIPOS", "AFI POS", "AFI_POS"],
+    "afiliado": ["AFILIADO", "AFILIACION", "AFILIACIÓN", "COD AFILIADO", "CODIGO AFILIADO", "CÓDIGO AFILIADO", "NRO AFILIADO", "NUMERO AFILIADO"],
+    "terminal": ["TERMINAL", "NRO TERMINAL", "NUMERO TERMINAL", "NÚMERO TERMINAL"],
+    "serial": ["SERIAL", "SERIALES", "SERIAL EQUIPO", "SERIAL_EQUIPO"],
+    "monto_tx": ["MONTO_TRANS_ACUM_MES", "MONTO TRANS ACUM MES", "MONTO_TRANSACCION_BS_ACUM_MES", "MONTO TRANSACCION BS ACUM MES", "MONTO_TRANS_BS_ACUM_MES", "MONTO TX", "MONTO_TX"],
+    "concatenar": ["CONCATENAR", "CONCATENADO", "AFILIADO TERMINAL", "AFILIADO+TERMINAL"],
+    "equipo": ["EQUIPO", "MODELO", "TIPO EQUIPO", "MODELO EQUIPO", "PRODUCTO"],
+    "estatus": ["ESTATUS", "STATUS", "ESTADO", "PENDIENTE"],
+    "canal": ["CANAL", "CANAL DE VENTAS", "CANAL DE VENTA", "CANAL DE VENTAS (JORNADA QUE PERTENECE)"],
+    "vendedor": ["VENDEDOR", "VENDEDOR AGENTE AUTORIZADOS", "VENDEDOR AGENTE AUTORIZADO", "VENDEDOR/AGENTE AUTORIZADO"],
+    "preafiliado": ["PRE AFILIADO", "PRE-AFILIADO", "PREAFILIADO", "PRE AFILIACION"],
+    "ag_autorizado": ["AG AUTORIZADO", "AGENTE AUTORIZADO?", "ES AGENTE AUTORIZADO"],
+    "access": ["ACCESS COMMERCE", "ACCESS COMERCE", "ACCESS"],
+    "con_tx": ["CON TX", "CON_TX", "ESTADO TX", "ESTATUS TX"],
 }
 
-
-# =========================================================
-# NORMALIZAR TEXTO
-# =========================================================
-
 def normalizar_texto(valor):
-
     if valor is None:
         return ""
-
-    if (
-        isinstance(valor, float)
-        and pd.isna(valor)
-    ):
+    if isinstance(valor, float) and pd.isna(valor):
         return ""
-
-    texto = str(
-        valor
-    ).strip()
-
-    texto = unicodedata.normalize(
-        "NFKD",
-        texto
-    )
-
-    texto = "".join(
-        c for c in texto
-        if not unicodedata.combining(c)
-    )
-
-    texto = re.sub(
-        r"\s+",
-        " ",
-        texto
-    )
-
+    texto = str(valor).strip()
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    texto = re.sub(r"\s+", " ", texto)
     return texto.upper()
 
+def normalizar_nombre_columna(nombre):
+    texto = normalizar_texto(nombre)
+    texto = re.sub(r"[^A-Z0-9]+", " ", texto)
+    return re.sub(r"\s+", " ", texto).strip()
 
-# =========================================================
-# NORMALIZAR NOMBRE DE COLUMNA
-# =========================================================
-
-def normalizar_nombre_columna(
-    nombre
-):
-
-    texto = normalizar_texto(
-        nombre
-    )
-
-    texto = re.sub(
-        r"[^A-Z0-9]+",
-        " ",
-        texto
-    )
-
-    return re.sub(
-        r"\s+",
-        " ",
-        texto
-    ).strip()
-
-
-# =========================================================
-# BUSCAR COLUMNA AUTOMÁTICAMENTE
-# =========================================================
-
-def buscar_columna(
-    df,
-    tipo
-):
-
+def buscar_columna(df, tipo):
     if df is None:
         return None
-
-    if len(
-        df.columns
-    ) == 0:
-        return None
-
-    alias_norm = {
-        normalizar_nombre_columna(x)
-        for x in ALIASES.get(
-            tipo,
-            []
-        )
-    }
-
-    columnas_norm = {
-        col: normalizar_nombre_columna(
-            col
-        )
-        for col in df.columns
-    }
-
-    # Primero coincidencia exacta
-
-    for col, norm in columnas_norm.items():
-
-        if norm in alias_norm:
+    aliases = {normalizar_nombre_columna(x) for x in ALIASES.get(tipo, [])}
+    columnas = {col: normalizar_nombre_columna(col) for col in df.columns}
+    for col, normalizada in columnas.items():
+        if normalizada in aliases:
             return col
-
-    # Luego coincidencia parcial
-
-    for col, norm in columnas_norm.items():
-
-        for alias in alias_norm:
-
-            if not alias:
-                continue
-
-            if (
-                alias in norm
-                or norm in alias
-            ):
+    for col, normalizada in columnas.items():
+        for alias in aliases:
+            if alias and (alias in normalizada or normalizada in alias):
                 return col
-
     return None
 
-
-# =========================================================
-# NORMALIZAR IDENTIFICADORES
-# =========================================================
-
-def normalizar_identificador(
-    valor
-):
-
-    if valor is None:
+def normalizar_identificador(valor):
+    if valor is None or pd.isna(valor):
         return ""
-
-    if pd.isna(
-        valor
-    ):
-        return ""
-
-    texto = str(
-        valor
-    ).strip()
-
-    if texto.upper() in {
-        "N/A",
-        "N/D",
-        "NA",
-        "ND",
-        "NAN",
-        "NONE",
-        "-"
-    }:
+    texto = str(valor).strip()
+    if texto.upper() in {"N/A", "N/D", "NA", "ND", "NAN", "NONE", "-"}:
         return texto.upper()
-
-    # Excel puede convertir IDs:
-    # 123456 -> 123456.0
-
-    if re.fullmatch(
-        r"\d+\.0+",
-        texto
-    ):
-        texto = texto.split(
-            "."
-        )[0]
-
-    texto = re.sub(
-        r"\s+",
-        "",
-        texto
-    )
-
+    if re.fullmatch(r"\d+\.0+", texto):
+        texto = texto.split(".")[0]
+    texto = re.sub(r"\s+", "", texto)
     return texto
 
-
-# =========================================================
-# NORMALIZAR MONTOS
-# =========================================================
-
-def normalizar_numero(
-    valor
-):
-
-    if valor is None:
+def normalizar_numero(valor):
+    if valor is None or pd.isna(valor):
         return None
-
-    if pd.isna(
-        valor
-    ):
+    texto = str(valor).strip()
+    if texto == "" or texto.upper() in {"N/A", "N/D", "NA", "ND", "NAN", "-"}:
         return None
-
-    texto = str(
-        valor
-    ).strip()
-
-    texto = texto.replace(
-        " ",
-        ""
-    )
-
-    if (
-        texto == ""
-        or texto.upper()
-        in {
-            "N/A",
-            "N/D",
-            "NA",
-            "ND",
-            "-",
-            "NAN"
-        }
-    ):
-        return None
-
-    texto = re.sub(
-        r"[^0-9,\.\-]",
-        "",
-        texto
-    )
-
-    # Ejemplo:
-    # 1.234,56
-    # 1,234.56
-
-    if (
-        "," in texto
-        and "." in texto
-    ):
-
-        if (
-            texto.rfind(",")
-            >
-            texto.rfind(".")
-        ):
-
-            texto = (
-                texto
-                .replace(
-                    ".",
-                    ""
-                )
-                .replace(
-                    ",",
-                    "."
-                )
-            )
-
+    texto = re.sub(r"[^0-9,\.\-]", "", texto)
+    if "," in texto and "." in texto:
+        if texto.rfind(",") > texto.rfind("."):
+            texto = texto.replace(".", "").replace(",", ".")
         else:
-
-            texto = texto.replace(
-                ",",
-                ""
-            )
-
+            texto = texto.replace(",", "")
     elif "," in texto:
-
-        texto = (
-            texto
-            .replace(
-                ".",
-                ""
-            )
-            .replace(
-                ",",
-                "."
-            )
-        )
-
+        texto = texto.replace(",", ".")
     try:
-
-        return float(
-            texto
-        )
-
+        return float(texto)
     except ValueError:
-
         return None
 
-
-# =========================================================
-# CONCATENAR AFILIADO + TERMINAL
-# =========================================================
-
-def crear_concatenar(
-    afiliado,
-    terminal
-):
-
-    afiliado = normalizar_identificador(
-        afiliado
-    )
-
-    terminal = normalizar_identificador(
-        terminal
-    )
-
-    if (
-        not afiliado
-        or not terminal
-    ):
+def crear_concatenar(afiliado, terminal):
+    afiliado = normalizar_identificador(afiliado)
+    terminal = normalizar_identificador(terminal)
+    if not afiliado or not terminal:
         return ""
+    return f"{afiliado}|{terminal}"
 
-    return (
-        f"{afiliado}|{terminal}"
-    )
-
-
-# =========================================================
-# VALORES SÍ / NO
-# =========================================================
-
-def valor_es_si(
-    valor
-):
-
-    texto = normalizar_texto(
-        valor
-    )
-
-    return texto in {
-        "SI",
-        "SÍ",
-        "YES",
-        "Y",
-        "1",
-        "TRUE",
-        "X",
-    }
-
-
-# =========================================================
-# VIERNES DE LA SEMANA ACTUAL
-# =========================================================
+def valor_es_si(valor):
+    return normalizar_texto(valor) in {"SI", "SÍ", "YES", "Y", "1", "TRUE", "X"}
 
 def viernes_semana_actual():
+    hoy = datetime.now(ZoneInfo("America/Caracas")).date()
+    return hoy + timedelta(days=(4 - hoy.weekday()))
 
-    hoy = datetime.now(
-        ZoneInfo(
-            "America/Caracas"
-        )
-    ).date()
+def leer_excel_general(archivo):
+    archivo.seek(0)
+    return pd.read_excel(archivo, dtype=str, engine="openpyxl")
 
-    viernes = hoy + timedelta(
-        days=(
-            4
-            -
-            hoy.weekday()
-        )
-    )
-
-    return viernes
-
-
-# =========================================================
-# LEER EXCEL
-# =========================================================
-
-def leer_excel(
-    archivo
-):
-
-    archivo.seek(
-        0
-    )
-
-    return pd.read_excel(
-        archivo,
-        dtype=str,
-        engine="openpyxl",
-    )
-
-
-# =========================================================
-# DETECTAR FORMATO DEL CSV
-# =========================================================
-
-def detectar_encoding_y_separador(
-    stream
-):
-
-    posicion = stream.tell()
-
-    muestra = stream.read(
-        65536
-    )
-
-    stream.seek(
-        posicion
-    )
-
-    if isinstance(
-        muestra,
-        str
-    ):
-
-        texto = muestra
-        encoding = None
-
-    else:
-
-        encoding = "utf-8-sig"
-
-        try:
-
-            texto = muestra.decode(
-                encoding
-            )
-
-        except UnicodeDecodeError:
-
-            encoding = "latin-1"
-
-            texto = muestra.decode(
-                encoding,
-                errors="replace",
-            )
-
+def leer_excel_comisiones(archivo):
+    archivo.seek(0)
     try:
+        df = pd.read_excel(archivo, sheet_name="VENTAS", dtype=str, engine="openpyxl")
+    except ValueError:
+        raise ValueError("No encontré la hoja 'VENTAS' en el archivo de Comisiones.")
+    df.attrs["hoja_origen"] = "VENTAS"
+    return df
 
-        dialecto = csv.Sniffer().sniff(
-            texto,
-            delimiters=[
-                ",",
-                ";",
-                "\t",
-                "|",
-            ]
-        )
-
-        separador = (
-            dialecto.delimiter
-        )
-
+def detectar_csv(stream):
+    posicion = stream.tell()
+    muestra = stream.read(65536)
+    stream.seek(posicion)
+    encoding = "utf-8-sig"
+    try:
+        texto = muestra.decode(encoding)
+    except UnicodeDecodeError:
+        encoding = "latin-1"
+        texto = muestra.decode(encoding, errors="replace")
+    try:
+        dialecto = csv.Sniffer().sniff(texto, delimiters=[",", ";", "\t", "|"])
+        separador = dialecto.delimiter
     except csv.Error:
+        separador = ";" if texto.count(";") > texto.count(",") else ","
+    return encoding, separador
 
-        if (
-            texto.count(";")
-            >
-            texto.count(",")
-        ):
-
-            separador = ";"
-
-        else:
-
-            separador = ","
-
-    return (
-        encoding,
-        separador,
-    )
-
-
-# =========================================================
-# SERIAL PINPAGOS DESDE TERMINAL
-# =========================================================
-
-def extraer_serial_desde_terminal(
-    valor
-):
-
-    texto = normalizar_identificador(
-        valor
-    )
-
+def extraer_serial_terminal(valor):
+    texto = normalizar_identificador(valor)
     if not texto:
         return ""
-
-    # Primero busca un bloque numérico largo
-
-    match = re.search(
-        r"\d{5,}",
-        texto
-    )
-
+    match = re.search(r"\d{5,}", texto)
     if match:
-        return match.group(
-            0
-        )
+        return match.group(0)
+    return re.split(r"[\s/|\\;,_-]+", texto)[0]
 
-    # Si no, toma lo que esté
-    # antes del primer separador.
-
-    return re.split(
-        r"[\s/|\\;,_-]+",
-        texto
-    )[0]
-
-
-# =========================================================
-# PROCESAR UN CSV DEL R34
-# =========================================================
-
-def procesar_stream_r34(
-    stream,
-    nombre_origen,
-    chunksize=100_000,
-):
-
-    stream.seek(
-        0
-    )
-
-    encoding, separador = (
-        detectar_encoding_y_separador(
-            stream
-        )
-    )
-
-    stream.seek(
-        0
-    )
-
+def procesar_csv_r34(stream, nombre, chunksize=100_000):
+    stream.seek(0)
+    encoding, separador = detectar_csv(stream)
+    stream.seek(0)
     partes = []
-
-    info = {
-
-        "archivo":
-            nombre_origen,
-
-        "filas_leidas":
-            0,
-
-        "filas_credicardpos":
-            0,
-    }
-
-    advertencias = []
-
-    lector = pd.read_csv(
-
-        stream,
-
-        sep=separador,
-
-        encoding=encoding,
-
-        dtype=str,
-
-        chunksize=chunksize,
-
-        on_bad_lines="skip",
-
-        low_memory=False,
-
-    )
-
+    filas_leidas = 0
+    filas_credicardpos = 0
     columnas_detectadas = None
 
+    lector = pd.read_csv(
+        stream,
+        sep=separador,
+        encoding=encoding,
+        dtype=str,
+        chunksize=chunksize,
+        on_bad_lines="skip",
+        low_memory=False,
+    )
+
     for chunk in lector:
-
-        info[
-            "filas_leidas"
-        ] += len(
-            chunk
-        )
-
-        # Detectamos las columnas una sola vez
-
+        filas_leidas += len(chunk)
         if columnas_detectadas is None:
-
             columnas_detectadas = {
-
-                "pertenencia":
-                    buscar_columna(
-                        chunk,
-                        "pertenencia",
-                    ),
-
-                "afipos":
-                    buscar_columna(
-                        chunk,
-                        "afipos",
-                    ),
-
-                "afiliado":
-                    buscar_columna(
-                        chunk,
-                        "afiliado",
-                    ),
-
-                "terminal":
-                    buscar_columna(
-                        chunk,
-                        "terminal",
-                    ),
-
-                "serial":
-                    buscar_columna(
-                        chunk,
-                        "serial",
-                    ),
-
-                "monto_tx":
-                    buscar_columna(
-                        chunk,
-                        "monto_tx",
-                    ),
-
+                "pertenencia": buscar_columna(chunk, "pertenencia"),
+                "afiliado": buscar_columna(chunk, "afiliado"),
+                "terminal": buscar_columna(chunk, "terminal"),
+                "serial": buscar_columna(chunk, "serial"),
+                "monto_tx": buscar_columna(chunk, "monto_tx"),
+                "afipos": buscar_columna(chunk, "afipos"),
             }
+            if columnas_detectadas["pertenencia"] is None:
+                raise ValueError(f"No se encontró PERTENENCIA en {nombre}.")
 
-            if (
-                columnas_detectadas[
-                    "pertenencia"
-                ]
-                is None
-            ):
-
-                raise ValueError(
-                    f"No encontré la columna "
-                    f"PERTENENCIA en "
-                    f"{nombre_origen}."
-                )
-
-            if (
-                columnas_detectadas[
-                    "monto_tx"
-                ]
-                is None
-            ):
-
-                advertencias.append(
-
-                    f"{nombre_origen}: "
-                    f"no encontré la columna "
-                    f"del monto transado."
-
-                )
-
-        # =================================================
-        # SOLO CREDICARDPOS
-        # =================================================
-
-        col_pertenencia = (
-            columnas_detectadas[
-                "pertenencia"
-            ]
-        )
-
-        mascara = (
-            chunk[
-                col_pertenencia
-            ]
-            .map(
-                normalizar_texto
-            )
-            .eq(
-                "CREDICARDPOS"
-            )
-        )
-
-        filtrado = (
-            chunk.loc[
-                mascara
-            ]
-            .copy()
-        )
-
-        info[
-            "filas_credicardpos"
-        ] += len(
-            filtrado
-        )
+        col_pertenencia = columnas_detectadas["pertenencia"]
+        mascara = chunk[col_pertenencia].map(normalizar_texto).eq("CREDICARDPOS")
+        filtrado = chunk.loc[mascara].copy()
+        filas_credicardpos += len(filtrado)
 
         if filtrado.empty:
             continue
 
-        col_afiliado = (
-            columnas_detectadas[
-                "afiliado"
-            ]
-        )
+        col_afiliado = columnas_detectadas["afiliado"]
+        col_terminal = columnas_detectadas["terminal"]
+        col_serial = columnas_detectadas["serial"]
+        col_monto = columnas_detectadas["monto_tx"]
 
-        col_terminal = (
-            columnas_detectadas[
-                "terminal"
-            ]
-        )
-
-        col_serial = (
-            columnas_detectadas[
-                "serial"
-            ]
-        )
-
-        col_monto = (
-            columnas_detectadas[
-                "monto_tx"
-            ]
-        )
-
-        col_afipos = (
-            columnas_detectadas[
-                "afipos"
-            ]
-        )
-
-        # =================================================
-        # CAMPOS INTERNOS
-        # =================================================
-
-        if col_afiliado:
-
-            filtrado[
-                "__AFILIADO"
-            ] = filtrado[
-                col_afiliado
-            ].map(
-                normalizar_identificador
-            )
-
-        else:
-
-            filtrado[
-                "__AFILIADO"
-            ] = ""
-
-        if col_terminal:
-
-            filtrado[
-                "__TERMINAL"
-            ] = filtrado[
-                col_terminal
-            ].map(
-                normalizar_identificador
-            )
-
-        else:
-
-            filtrado[
-                "__TERMINAL"
-            ] = ""
-
-        if col_serial:
-
-            filtrado[
-                "__SERIAL"
-            ] = filtrado[
-                col_serial
-            ].map(
-                normalizar_identificador
-            )
-
-        else:
-
-            filtrado[
-                "__SERIAL"
-            ] = ""
-
-        if col_monto:
-
-            filtrado[
-                "__MONTO_TX"
-            ] = filtrado[
-                col_monto
-            ].map(
-                normalizar_numero
-            )
-
-        else:
-
-            filtrado[
-                "__MONTO_TX"
-            ] = None
-
-        if col_afipos:
-
-            filtrado[
-                "__AFIPOS"
-            ] = filtrado[
-                col_afipos
-            ].astype(
-                str
-            ).str.strip()
-
-        else:
-
-            filtrado[
-                "__AFIPOS"
-            ] = ""
-
-        # Pinpagos:
-        # guardamos un serial candidato
-        # proveniente del TERMINAL.
-
-        filtrado[
-            "__SERIAL_DESDE_TERMINAL"
-        ] = filtrado[
-            "__TERMINAL"
-        ].map(
-            extraer_serial_desde_terminal
-        )
-
-        filtrado[
-            "__CONCATENAR"
-        ] = [
-
-            crear_concatenar(
-                afiliado,
-                terminal
-            )
-
-            for afiliado, terminal
-            in zip(
-
-                filtrado[
-                    "__AFILIADO"
-                ],
-
-                filtrado[
-                    "__TERMINAL"
-                ],
-
-            )
-        ]
-
-        filtrado[
-            "__ORIGEN_R34"
-        ] = nombre_origen
-
-        # Para no guardar 600 MB
-        # en memoria solo dejamos
-        # lo que necesitamos.
-
-        mantener = [
-
-            "__AFILIADO",
-
-            "__TERMINAL",
-
-            "__SERIAL",
-
-            "__MONTO_TX",
-
-            "__AFIPOS",
-
-            "__SERIAL_DESDE_TERMINAL",
-
-            "__CONCATENAR",
-
-            "__ORIGEN_R34",
-
+        filtrado["__AFILIADO"] = filtrado[col_afiliado].map(normalizar_identificador) if col_afiliado else ""
+        filtrado["__TERMINAL"] = filtrado[col_terminal].map(normalizar_identificador) if col_terminal else ""
+        filtrado["__SERIAL"] = filtrado[col_serial].map(normalizar_identificador) if col_serial else ""
+        filtrado["__MONTO_TX"] = filtrado[col_monto].map(normalizar_numero) if col_monto else None
+        filtrado["__SERIAL_TERMINAL"] = filtrado["__TERMINAL"].map(extraer_serial_terminal)
+        filtrado["__CONCATENAR"] = [
+            crear_concatenar(afi, ter)
+            for afi, ter in zip(filtrado["__AFILIADO"], filtrado["__TERMINAL"])
         ]
 
         partes.append(
             filtrado[
-                mantener
+                ["__AFILIADO", "__TERMINAL", "__SERIAL", "__SERIAL_TERMINAL", "__MONTO_TX", "__CONCATENAR"]
             ]
         )
 
-    if partes:
-
-        resultado = pd.concat(
-            partes,
-            ignore_index=True,
-        )
-
-    else:
-
-        resultado = pd.DataFrame(
-
-            columns=[
-
-                "__AFILIADO",
-
-                "__TERMINAL",
-
-                "__SERIAL",
-
-                "__MONTO_TX",
-
-                "__AFIPOS",
-
-                "__SERIAL_DESDE_TERMINAL",
-
-                "__CONCATENAR",
-
-                "__ORIGEN_R34",
-
-            ]
-
-        )
-
-    return (
-        resultado,
-        info,
-        advertencias,
+    resultado = pd.concat(partes, ignore_index=True) if partes else pd.DataFrame(
+        columns=["__AFILIADO", "__TERMINAL", "__SERIAL", "__SERIAL_TERMINAL", "__MONTO_TX", "__CONCATENAR"]
     )
 
+    detalle = {
+        "archivo": nombre,
+        "filas_leidas": filas_leidas,
+        "filas_credicardpos": filas_credicardpos,
+    }
+    return resultado, detalle
 
-# =========================================================
-# PROCESAR R34 COMPLETO
-# =========================================================
-
-def procesar_r34(
-    archivos_r34,
-    chunksize=100_000,
-):
-
-    resultados = []
-
+def procesar_r34(archivos_r34, chunksize=100_000):
+    partes = []
     detalles = []
-
-    advertencias = []
-
     for archivo in archivos_r34:
+        archivo.seek(0)
+        nombre = archivo.name.lower()
 
-        nombre = (
-            archivo.name.lower()
-        )
-
-        archivo.seek(
-            0
-        )
-
-        # =================================================
-        # ZIP
-        # =================================================
-
-        if nombre.endswith(
-            ".zip"
-        ):
-
-            contenido = (
-                archivo.getvalue()
-            )
-
-            with zipfile.ZipFile(
-                io.BytesIO(
-                    contenido
-                )
-            ) as zf:
-
-                csvs = [
-
-                    nombre_interno
-
-                    for nombre_interno
-                    in zf.namelist()
-
-                    if (
-                        nombre_interno
-                        .lower()
-                        .endswith(
-                            ".csv"
-                        )
-                    )
-
-                    and not (
-                        nombre_interno
-                        .startswith(
-                            "__MACOSX/"
-                        )
-                    )
-
-                ]
-
+        if nombre.endswith(".zip"):
+            datos = archivo.getvalue()
+            with zipfile.ZipFile(io.BytesIO(datos)) as zf:
+                csvs = [n for n in zf.namelist() if n.lower().endswith(".csv")]
                 if not csvs:
-
-                    raise ValueError(
-
-                        f"El ZIP "
-                        f"{archivo.name} "
-                        f"no contiene ningún CSV."
-
-                    )
-
-                for nombre_csv in csvs:
-
-                    with zf.open(
-                        nombre_csv,
-                        "r"
-                    ) as stream:
-
-                        (
-                            df,
-                            info,
-                            avisos,
-                        ) = procesar_stream_r34(
-
+                    raise ValueError(f"{archivo.name} no contiene ningún CSV.")
+                for csv_interno in csvs:
+                    with zf.open(csv_interno, "r") as stream:
+                        df, detalle = procesar_csv_r34(
                             stream,
-
-                            (
-                                f"{archivo.name}"
-                                f"::{nombre_csv}"
-                            ),
-
-                            chunksize,
-
+                            f"{archivo.name}::{csv_interno}",
+                            chunksize
                         )
+                        partes.append(df)
+                        detalles.append(detalle)
 
-                        resultados.append(
-                            df
-                        )
-
-                        detalles.append(
-                            info
-                        )
-
-                        advertencias.extend(
-                            avisos
-                        )
-
-        # =================================================
-        # CSV DIRECTO
-        # =================================================
-
-        elif nombre.endswith(
-            ".csv"
-        ):
-
-            (
-                df,
-                info,
-                avisos,
-            ) = procesar_stream_r34(
-
-                archivo,
-
-                archivo.name,
-
-                chunksize,
-
-            )
-
-            resultados.append(
-                df
-            )
-
-            detalles.append(
-                info
-            )
-
-            advertencias.extend(
-                avisos
-            )
+        elif nombre.endswith(".csv"):
+            df, detalle = procesar_csv_r34(archivo, archivo.name, chunksize)
+            partes.append(df)
+            detalles.append(detalle)
 
         else:
+            raise ValueError(f"Formato no soportado para R34: {archivo.name}")
 
-            raise ValueError(
+    r34 = pd.concat(partes, ignore_index=True) if partes else pd.DataFrame()
+    return r34, detalles
 
-                f"Formato de R34 "
-                f"no soportado: "
-                f"{archivo.name}"
+def preparar_comisiones(archivo_comisiones):
+    df = leer_excel_comisiones(archivo_comisiones)
+    df = df.dropna(how="all").copy()
+    df["__ORIGEN"] = "COMISIONES"
 
-            )
+    col_afiliado = buscar_columna(df, "afiliado")
+    col_terminal = buscar_columna(df, "terminal")
+    col_serial = buscar_columna(df, "serial")
+    col_equipo = buscar_columna(df, "equipo")
 
-    if resultados:
+    if col_afiliado is None:
+        raise ValueError("En la hoja VENTAS no encontré la columna AFILIADO.")
+    if col_terminal is None:
+        raise ValueError("En la hoja VENTAS no encontré la columna TERMINAL.")
 
-        r34 = pd.concat(
+    df["__AFILIADO"] = df[col_afiliado].map(normalizar_identificador)
+    df["__TERMINAL"] = df[col_terminal].map(normalizar_identificador)
+    df["__SERIAL_COMISION"] = df[col_serial].map(normalizar_identificador) if col_serial else ""
+    df["__EQUIPO_STD"] = df[col_equipo].map(estandarizar_equipo) if col_equipo else ""
+    df["__CONCATENAR"] = [
+        crear_concatenar(afi, ter)
+        for afi, ter in zip(df["__AFILIADO"], df["__TERMINAL"])
+    ]
+    df["__ROW_ID"] = range(1, len(df) + 1)
+    return df
 
-            resultados,
-
-            ignore_index=True,
-
-        )
-
-    else:
-
-        r34 = pd.DataFrame()
-
-    return (
-        r34,
-        detalles,
-        advertencias,
-    )
-
-
-# =========================================================
-# PREPARAR VENTAS
-# =========================================================
-
-def preparar_ventas(
-    archivos_ventas
-):
-
+def preparar_ventas(archivos_ventas):
     partes = []
-
     excluidas = []
-
     advertencias = []
 
     for archivo in archivos_ventas:
+        df = leer_excel_general(archivo)
+        df = df.dropna(how="all").copy()
+        df["__ARCHIVO_ORIGEN"] = archivo.name
 
-        df = leer_excel(
-            archivo
-        )
+        col_afiliado = buscar_columna(df, "afiliado")
+        col_terminal = buscar_columna(df, "terminal")
+        col_equipo = buscar_columna(df, "equipo")
+        col_pre = buscar_columna(df, "preafiliado")
+        col_ag = buscar_columna(df, "ag_autorizado")
 
-        df[
-            "__ARCHIVO_ORIGEN"
-        ] = archivo.name
+        if col_afiliado is None:
+            raise ValueError(f"No encontré AFILIADO en {archivo.name}.")
+        if col_terminal is None:
+            raise ValueError(f"No encontré TERMINAL en {archivo.name}.")
 
-        col_afiliado = buscar_columna(
-            df,
-            "afiliado"
-        )
+        df["__AFILIADO"] = df[col_afiliado].map(normalizar_identificador)
+        df["__TERMINAL"] = df[col_terminal].map(normalizar_identificador)
+        df["__CONCATENAR"] = [
+            crear_concatenar(afi, ter)
+            for afi, ter in zip(df["__AFILIADO"], df["__TERMINAL"])
+        ]
+        df["__EQUIPO_STD"] = df[col_equipo].map(estandarizar_equipo) if col_equipo else ""
+        df["__MOTIVO_EXCLUSION"] = ""
 
-        col_terminal = buscar_columna(
-            df,
-            "terminal"
-        )
-
-        col_concatenar = buscar_columna(
-            df,
-            "concatenar"
-        )
-
-        col_equipo = buscar_columna(
-            df,
-            "equipo"
-        )
-
-        col_pre = buscar_columna(
-            df,
-            "preafiliado"
-        )
-
-        col_ag_flag = buscar_columna(
-            df,
-            "ag_autorizado_flag"
-        )
-
-        # =================================================
-        # AFILIADO
-        # =================================================
-
-        if col_afiliado:
-
-            df[
-                "__AFILIADO"
-            ] = df[
-                col_afiliado
-            ].map(
-                normalizar_identificador
-            )
-
-        else:
-
-            df[
-                "__AFILIADO"
-            ] = ""
-
-        # =================================================
-        # TERMINAL
-        # =================================================
-
-        if col_terminal:
-
-            df[
-                "__TERMINAL"
-            ] = df[
-                col_terminal
-            ].map(
-                normalizar_identificador
-            )
-
-        else:
-
-            df[
-                "__TERMINAL"
-            ] = ""
-
-        # =================================================
-        # CONCATENAR
-        # =================================================
-
-        if col_concatenar:
-
-            existente = df[
-                col_concatenar
-            ].map(
-                normalizar_identificador
-            )
-
-            creado = [
-
-                crear_concatenar(
-                    afiliado,
-                    terminal
-                )
-
-                for afiliado, terminal
-                in zip(
-
-                    df[
-                        "__AFILIADO"
-                    ],
-
-                    df[
-                        "__TERMINAL"
-                    ],
-
-                )
-
-            ]
-
-            df[
-                "__CONCATENAR"
-            ] = [
-
-                e if e else c
-
-                for e, c
-                in zip(
-                    existente,
-                    creado
-                )
-
-            ]
-
-        else:
-
-            df[
-                "__CONCATENAR"
-            ] = [
-
-                crear_concatenar(
-                    afiliado,
-                    terminal
-                )
-
-                for afiliado, terminal
-                in zip(
-
-                    df[
-                        "__AFILIADO"
-                    ],
-
-                    df[
-                        "__TERMINAL"
-                    ],
-
-                )
-
-            ]
-
-        # =================================================
-        # EQUIPO
-        # =================================================
-
-        if col_equipo:
-
-            df[
-                "__EQUIPO_STD"
-            ] = df[
-                col_equipo
-            ].map(
-                estandarizar_equipo
-            )
-
-        else:
-
-            df[
-                "__EQUIPO_STD"
-            ] = ""
-
-        df[
-            "__MOTIVO_EXCLUSION"
-        ] = ""
-
-        # =================================================
-        # TERMINAL = 0 / NO SIMCARD
-        # =================================================
-
-        mascara_terminal_0 = (
-            df[
-                "__TERMINAL"
-            ]
-            .isin(
-                {
-                    "0",
-                    "0.0",
-                }
-            )
-        )
-
-        df.loc[
-
-            mascara_terminal_0,
-
-            "__MOTIVO_EXCLUSION"
-
-        ] = (
-            "Terminal = 0 / No Simcard"
-        )
-
-        # =================================================
-        # PRE-AFILIADOS
-        # =================================================
+        mascara_terminal_0 = df["__TERMINAL"].isin({"0", "0.0"})
+        df.loc[mascara_terminal_0, "__MOTIVO_EXCLUSION"] = "Terminal = 0 / No Simcard"
 
         if col_pre:
-
-            mascara_pre = df[
-                col_pre
-            ].map(
-
-                lambda x:
-
-                valor_es_si(x)
-
-                or (
-                    "PRE"
-                    in normalizar_texto(
-                        x
-                    )
-                )
-
+            mascara_pre = df[col_pre].map(
+                lambda x: valor_es_si(x) or "PRE" in normalizar_texto(x)
             )
-
             df.loc[
-
-                mascara_pre
-
-                & (
-                    df[
-                        "__MOTIVO_EXCLUSION"
-                    ]
-                    == ""
-                ),
-
+                mascara_pre & df["__MOTIVO_EXCLUSION"].eq(""),
                 "__MOTIVO_EXCLUSION"
-
             ] = "Pre-afiliado"
 
-        # =================================================
-        # AGENTES AUTORIZADOS
-        # =================================================
-        #
-        # Aquí soy conservador:
-        # solo se elimina automáticamente si existe
-        # una columna explícita que diga que es
-        # Agente Autorizado.
-        #
-        # No voy a eliminar por simplemente encontrar
-        # un nombre en vendedor porque esa regla todavía
-        # puede necesitar ajuste.
-        # =================================================
-
-        if col_ag_flag:
-
-            mascara_ag = df[
-                col_ag_flag
-            ].map(
-                valor_es_si
-            )
-
+        if col_ag:
+            mascara_ag = df[col_ag].map(valor_es_si)
             df.loc[
-
-                mascara_ag
-
-                & (
-                    df[
-                        "__MOTIVO_EXCLUSION"
-                    ]
-                    == ""
-                ),
-
+                mascara_ag & df["__MOTIVO_EXCLUSION"].eq(""),
                 "__MOTIVO_EXCLUSION"
-
-            ] = (
-                "Venta AG Autorizado"
-            )
-
+            ] = "AG Autorizado"
         else:
-
             advertencias.append(
-
-                f"{archivo.name}: "
-                f"no encontré una columna "
-                f"explícita para identificar "
-                f"ventas de AG Autorizados. "
-                f"No se eliminaron automáticamente."
-
+                f"{archivo.name}: no encontré una columna explícita para identificar AG Autorizados."
             )
 
-        # =================================================
-        # SEPARAR
-        # =================================================
+        excluidas.append(df[df["__MOTIVO_EXCLUSION"].ne("")].copy())
+        partes.append(df[df["__MOTIVO_EXCLUSION"].eq("")].copy())
 
-        excl = df[
+    ventas = pd.concat(partes, ignore_index=True) if partes else pd.DataFrame()
+    ventas_excluidas = pd.concat(excluidas, ignore_index=True) if excluidas else pd.DataFrame()
 
-            df[
-                "__MOTIVO_EXCLUSION"
-            ]
-            != ""
-
-        ].copy()
-
-        ok = df[
-
-            df[
-                "__MOTIVO_EXCLUSION"
-            ]
-            == ""
-
-        ].copy()
-
-        excluidas.append(
-            excl
-        )
-
-        partes.append(
-            ok
-        )
-
-    # =====================================================
-    # UNIR VARIOS MESES
-    # =====================================================
-
-    if partes:
-
-        ventas = pd.concat(
-
-            partes,
-
-            ignore_index=True,
-
-        )
-
+    if not ventas.empty:
+        mascara_dup = ventas["__CONCATENAR"].ne("") & ventas.duplicated("__CONCATENAR", keep="first")
+        duplicadas = ventas[mascara_dup].copy()
+        ventas = ventas[~mascara_dup].copy()
     else:
-
-        ventas = pd.DataFrame()
-
-    if excluidas:
-
-        ventas_excluidas = pd.concat(
-
-            excluidas,
-
-            ignore_index=True,
-
-        )
-
-    else:
-
-        ventas_excluidas = pd.DataFrame()
-
-    # =====================================================
-    # DUPLICADOS ENTRE LOS REPORTES SUBIDOS
-    # =====================================================
-
-    if (
-        not ventas.empty
-        and "__CONCATENAR"
-        in ventas.columns
-    ):
-
-        ventas[
-            "__DUPLICADO_ENTRE_VENTAS"
-        ] = (
-
-            ventas.duplicated(
-                "__CONCATENAR",
-                keep="first"
-            )
-
-            & ventas[
-                "__CONCATENAR"
-            ].ne(
-                ""
-            )
-
-        )
-
-        duplicadas = ventas[
-
-            ventas[
-                "__DUPLICADO_ENTRE_VENTAS"
-            ]
-
-        ].copy()
-
-        ventas = ventas[
-
-            ~ventas[
-                "__DUPLICADO_ENTRE_VENTAS"
-            ]
-
-        ].copy()
-
-    else:
-
         duplicadas = pd.DataFrame()
 
-    return (
+    return ventas, ventas_excluidas, duplicadas, advertencias
 
-        ventas,
-
-        ventas_excluidas,
-
-        duplicadas,
-
-        advertencias,
-
-    )
-
-
-# =========================================================
-# PREPARAR COMISIONES
-# =========================================================
-
-def preparar_comisiones(
-    archivo_comisiones
-):
-
-    df = leer_excel(
-        archivo_comisiones
-    )
-
-    df[
-        "__ORIGEN"
-    ] = (
-        "COMISIONES"
-    )
-
-    df[
-        "__ROW_ID"
-    ] = range(
-        1,
-        len(df) + 1
-    )
-
-    col_afiliado = buscar_columna(
-        df,
-        "afiliado"
-    )
-
-    col_terminal = buscar_columna(
-        df,
-        "terminal"
-    )
-
-    col_concatenar = buscar_columna(
-        df,
-        "concatenar"
-    )
-
-    col_serial = buscar_columna(
-        df,
-        "serial"
-    )
-
-    col_equipo = buscar_columna(
-        df,
-        "equipo"
-    )
-
-    if col_afiliado:
-
-        df[
-            "__AFILIADO"
-        ] = df[
-            col_afiliado
-        ].map(
-            normalizar_identificador
-        )
-
-    else:
-
-        df[
-            "__AFILIADO"
-        ] = ""
-
-    if col_terminal:
-
-        df[
-            "__TERMINAL"
-        ] = df[
-            col_terminal
-        ].map(
-            normalizar_identificador
-        )
-
-    else:
-
-        df[
-            "__TERMINAL"
-        ] = ""
-
-    if col_serial:
-
-        df[
-            "__SERIAL_COMISION"
-        ] = df[
-            col_serial
-        ].map(
-            normalizar_identificador
-        )
-
-    else:
-
-        df[
-            "__SERIAL_COMISION"
-        ] = ""
-
-    if col_equipo:
-
-        df[
-            "__EQUIPO_STD"
-        ] = df[
-            col_equipo
-        ].map(
-            estandarizar_equipo
-        )
-
-    else:
-
-        df[
-            "__EQUIPO_STD"
-        ] = ""
-
-    # =====================================================
-    # CONCATENAR
-    # =====================================================
-
-    if col_concatenar:
-
-        existente = df[
-            col_concatenar
-        ].map(
-            normalizar_identificador
-        )
-
-        creado = [
-
-            crear_concatenar(
-                afiliado,
-                terminal
-            )
-
-            for afiliado, terminal
-            in zip(
-
-                df[
-                    "__AFILIADO"
-                ],
-
-                df[
-                    "__TERMINAL"
-                ],
-
-            )
-
-        ]
-
-        df[
-            "__CONCATENAR"
-        ] = [
-
-            e if e else c
-
-            for e, c
-            in zip(
-                existente,
-                creado
-            )
-
-        ]
-
-    else:
-
-        df[
-            "__CONCATENAR"
-        ] = [
-
-            crear_concatenar(
-                afiliado,
-                terminal
-            )
-
-            for afiliado, terminal
-            in zip(
-
-                df[
-                    "__AFILIADO"
-                ],
-
-                df[
-                    "__TERMINAL"
-                ],
-
-            )
-
-        ]
-
-    return df
-
-
-# =========================================================
-# COPIAR VENTAS NUEVAS AL FORMATO COMISIONES
-# =========================================================
-
-def copiar_ventas_a_plantilla(
-    ventas_nuevas,
-    comisiones
-):
-
+def crear_filas_nuevas(ventas_nuevas, comisiones):
     if ventas_nuevas.empty:
+        return pd.DataFrame(columns=comisiones.columns)
 
-        return pd.DataFrame(
-            columns=comisiones.columns
-        )
-
-    nuevos = pd.DataFrame(
-
-        index=ventas_nuevas.index,
-
+    nuevas = pd.DataFrame(
+        index=range(len(ventas_nuevas)),
         columns=comisiones.columns,
-
-        dtype=object,
-
+        dtype=object
     )
 
-    campos = [
+    for columna_destino in comisiones.columns:
+        if str(columna_destino).startswith("__"):
+            continue
+        destino_normalizado = normalizar_nombre_columna(columna_destino)
 
-        "afiliado",
+        for columna_origen in ventas_nuevas.columns:
+            if str(columna_origen).startswith("__"):
+                continue
+            origen_normalizado = normalizar_nombre_columna(columna_origen)
+            if destino_normalizado == origen_normalizado:
+                nuevas[columna_destino] = ventas_nuevas[columna_origen].values
+                break
 
-        "terminal",
+    tipos = ["afiliado", "terminal", "serial", "equipo", "canal", "vendedor"]
 
-        "concatenar",
+    for tipo in tipos:
+        destino = buscar_columna(comisiones, tipo)
+        origen = buscar_columna(ventas_nuevas, tipo)
+        if destino and origen:
+            nuevas[destino] = ventas_nuevas[origen].values
 
-        "serial",
-
-        "equipo",
-
-        "canal",
-
-        "vendedor_agente",
-
-        "estatus",
-
-    ]
-
-    for tipo in campos:
-
-        destino = buscar_columna(
-            comisiones,
-            tipo
-        )
-
-        origen = buscar_columna(
-            ventas_nuevas,
-            tipo
-        )
-
-        if (
-            destino
-            and origen
-        ):
-
-            nuevos[
-                destino
-            ] = ventas_nuevas[
-                origen
-            ].values
-
-    nuevos[
-        "__ORIGEN"
-    ] = (
-        "VENTAS_NUEVAS"
-    )
-
-    nuevos[
-        "__AFILIADO"
-    ] = ventas_nuevas[
-        "__AFILIADO"
-    ].values
-
-    nuevos[
-        "__TERMINAL"
-    ] = ventas_nuevas[
-        "__TERMINAL"
-    ].values
-
-    nuevos[
-        "__CONCATENAR"
-    ] = ventas_nuevas[
-        "__CONCATENAR"
-    ].values
-
-    nuevos[
-        "__EQUIPO_STD"
-    ] = ventas_nuevas[
-        "__EQUIPO_STD"
-    ].values
-
-    col_serial = buscar_columna(
-        ventas_nuevas,
-        "serial"
-    )
-
-    if col_serial:
-
-        nuevos[
-            "__SERIAL_COMISION"
-        ] = ventas_nuevas[
-            col_serial
-        ].map(
-            normalizar_identificador
-        ).values
-
-    else:
-
-        nuevos[
-            "__SERIAL_COMISION"
-        ] = ""
-
-    col_estatus = buscar_columna(
-        comisiones,
-        "estatus"
-    )
-
+    col_estatus = buscar_columna(comisiones, "estatus")
     if col_estatus:
+        nuevas[col_estatus] = "Pendiente"
 
-        nuevos[
-            col_estatus
-        ] = "Pendiente"
+    nuevas["__ORIGEN"] = "VENTAS_NUEVAS"
+    nuevas["__AFILIADO"] = ventas_nuevas["__AFILIADO"].values
+    nuevas["__TERMINAL"] = ventas_nuevas["__TERMINAL"].values
+    nuevas["__CONCATENAR"] = ventas_nuevas["__CONCATENAR"].values
+    nuevas["__EQUIPO_STD"] = ventas_nuevas["__EQUIPO_STD"].values
 
-    return nuevos
+    col_serial_ventas = buscar_columna(ventas_nuevas, "serial")
+    nuevas["__SERIAL_COMISION"] = (
+        ventas_nuevas[col_serial_ventas].map(normalizar_identificador).values
+        if col_serial_ventas else ""
+    )
+    return nuevas
 
-
-# =========================================================
-# AGREGAR SOLO VENTAS NUEVAS
-# =========================================================
-
-def integrar_ventas(
-    comisiones,
-    ventas
-):
-
-    if ventas.empty:
-
-        return (
-
-            comisiones.copy(),
-
-            pd.DataFrame(),
-
-            pd.DataFrame(),
-
-        )
-
+def integrar_ventas(comisiones, ventas):
     claves_existentes = set(
-
         comisiones.loc[
-
-            comisiones[
-                "__CONCATENAR"
-            ].ne(
-                ""
-            ),
-
-            "__CONCATENAR",
-
-        ].astype(
-            str
-        )
-
+            comisiones["__CONCATENAR"].ne(""),
+            "__CONCATENAR"
+        ].astype(str)
     )
 
     mascara_nueva = (
-
-        ventas[
-            "__CONCATENAR"
-        ].ne(
-            ""
-        )
-
-        & ~ventas[
-            "__CONCATENAR"
-        ].isin(
-            claves_existentes
-        )
-
+        ventas["__CONCATENAR"].ne("")
+        & ~ventas["__CONCATENAR"].isin(claves_existentes)
     )
 
-    ventas_nuevas = ventas[
+    ventas_nuevas = ventas[mascara_nueva].copy()
+    ventas_existentes = ventas[~mascara_nueva].copy()
+    nuevas_en_formato = crear_filas_nuevas(ventas_nuevas, comisiones)
 
-        mascara_nueva
-
-    ].copy()
-
-    ventas_ya_existentes = ventas[
-
-        ~mascara_nueva
-
-    ].copy()
-
-    nuevos = copiar_ventas_a_plantilla(
-
-        ventas_nuevas,
-
-        comisiones,
-
-    )
-
-    combinado = pd.concat(
-
-        [
-            comisiones,
-            nuevos,
-        ],
-
+    resultado = pd.concat(
+        [comisiones, nuevas_en_formato],
         ignore_index=True,
-
-        sort=False,
-
+        sort=False
     )
+    resultado["__ROW_ID"] = range(1, len(resultado) + 1)
+    return resultado, ventas_nuevas, ventas_existentes
 
-    combinado[
-        "__ROW_ID"
-    ] = range(
-        1,
-        len(combinado) + 1
-    )
-
-    return (
-
-        combinado,
-
-        ventas_nuevas,
-
-        ventas_ya_existentes,
-
-    )
-
-
-# =========================================================
-# ACCESS COMMERCE
-# =========================================================
-
-def preparar_access(
-    archivo_access
-):
-
-    df = leer_excel(
-        archivo_access
-    )
-
-    col_afiliado = buscar_columna(
-        df,
-        "afiliado"
-    )
+def preparar_access(archivo_access):
+    df = leer_excel_general(archivo_access)
+    col_afiliado = buscar_columna(df, "afiliado")
 
     if col_afiliado is None:
+        raise ValueError("No encontré AFILIADO en Access Commerce.")
 
-        raise ValueError(
-
-            "No encontré una columna "
-            "de AFILIADO/AFILIACIÓN "
-            "en Access Commerce."
-
-        )
-
-    df[
-        "__AFILIADO"
-    ] = df[
-        col_afiliado
-    ].map(
-        normalizar_identificador
-    )
-
+    df["__AFILIADO"] = df[col_afiliado].map(normalizar_identificador)
     afiliados = set(
-
-        df.loc[
-
-            df[
-                "__AFILIADO"
-            ].ne(
-                ""
-            ),
-
-            "__AFILIADO",
-
-        ].astype(
-            str
-        )
-
+        df.loc[df["__AFILIADO"].ne(""), "__AFILIADO"].astype(str)
     )
+    return df, afiliados
 
-    return (
-        df,
-        afiliados,
-    )
-
-
-# =========================================================
-# CREAR LOOKUP DEL R34
-# =========================================================
-
-def crear_lookup_r34(
-    r34
-):
-
-    if r34.empty:
-        return {}
-
+def crear_lookup_r34(r34):
     lookup = {}
+    if r34.empty:
+        return lookup
 
-    for _, row in r34.iterrows():
-
-        clave = row.get(
-            "__CONCATENAR",
-            ""
-        )
-
+    for _, fila in r34.iterrows():
+        clave = fila.get("__CONCATENAR", "")
         if not clave:
             continue
 
-        monto = row.get(
-            "__MONTO_TX"
-        )
-
-        actual = lookup.get(
-            clave
-        )
-
+        actual = lookup.get(clave)
         if actual is None:
-
-            lookup[
-                clave
-            ] = row.to_dict()
-
+            lookup[clave] = fila.to_dict()
             continue
 
-        monto_actual = actual.get(
-            "__MONTO_TX"
-        )
+        monto_nuevo = fila.get("__MONTO_TX")
+        monto_actual = actual.get("__MONTO_TX")
 
-        # Si existen varias filas,
-        # conservamos la de mayor monto.
-
-        if (
-            monto is not None
-            and not pd.isna(
-                monto
-            )
-        ):
-
+        if monto_nuevo is not None and not pd.isna(monto_nuevo):
             if (
                 monto_actual is None
-                or pd.isna(
-                    monto_actual
-                )
-                or float(
-                    monto
-                )
-                >
-                float(
-                    monto_actual
-                )
+                or pd.isna(monto_actual)
+                or float(monto_nuevo) > float(monto_actual)
             ):
-
-                lookup[
-                    clave
-                ] = row.to_dict()
+                lookup[clave] = fila.to_dict()
 
     return lookup
 
-
-# =========================================================
-# ESTADO TRANSACCIÓN
-# =========================================================
-
-def estado_transaccion(
-    monto
-):
-
-    if (
-        monto is None
-        or pd.isna(
-            monto
-        )
-    ):
-
+def estado_transaccion(monto):
+    if monto is None or pd.isna(monto):
         return "N/A"
-
-    monto = float(
-        monto
-    )
-
-    # Según la regla documentada:
-    # +1.000 = CON_TX
-
+    monto = float(monto)
     if monto > 1000:
-
         return "CON_TX"
-
-    # 0.01 hasta 999.99
-
-    if (
-        0.01
-        <= monto
-        <= 999.99
-    ):
-
+    if 0.01 <= monto <= 999.99:
         return "C/P SIN TX"
-
-    # 0
-
     if monto == 0:
-
         return "SIN TX"
-
-    # 1000 exactos no está definido
-    # claramente en la guía.
-    # Lo mandamos a revisar,
-    # no inventamos una regla.
-
     if monto == 1000:
-
         return "REVISAR 1000"
-
     return "REVISAR"
 
-
-# =========================================================
-# RECALCULAR CRUCES Y VALIDACIONES
-# =========================================================
-
-def recalcular_comisiones(
-    df,
-    r34,
-    afiliados_access,
-):
-
+def recalcular_comisiones(df, r34, afiliados_access):
     resultado = df.copy()
+    lookup = crear_lookup_r34(r34)
 
-    lookup = crear_lookup_r34(
-        r34
-    )
-
-    # =====================================================
-    # COLUMNAS DEL ARCHIVO DE COMISIONES
-    # =====================================================
-
-    col_afiliado = buscar_columna(
-        resultado,
-        "afiliado"
-    )
-
-    col_terminal = buscar_columna(
-        resultado,
-        "terminal"
-    )
-
-    col_serial = buscar_columna(
-        resultado,
-        "serial"
-    )
-
-    col_equipo = buscar_columna(
-        resultado,
-        "equipo"
-    )
-
-    col_estatus = buscar_columna(
-        resultado,
-        "estatus"
-    )
-
-    col_access_original = buscar_columna(
-        resultado,
-        "access"
-    )
-
-    col_con_tx_original = buscar_columna(
-        resultado,
-        "con_tx"
-    )
-
-    # =====================================================
-    # REFRESCAR INFORMACIÓN INTERNA
-    # =====================================================
+    col_afiliado = buscar_columna(resultado, "afiliado")
+    col_terminal = buscar_columna(resultado, "terminal")
+    col_serial = buscar_columna(resultado, "serial")
+    col_equipo = buscar_columna(resultado, "equipo")
+    col_estatus = buscar_columna(resultado, "estatus")
+    col_access = buscar_columna(resultado, "access")
+    col_tx = buscar_columna(resultado, "con_tx")
 
     if col_afiliado:
-
-        resultado[
-            "__AFILIADO"
-        ] = resultado[
-            col_afiliado
-        ].map(
-            normalizar_identificador
-        )
-
+        resultado["__AFILIADO"] = resultado[col_afiliado].map(normalizar_identificador)
     if col_terminal:
-
-        resultado[
-            "__TERMINAL"
-        ] = resultado[
-            col_terminal
-        ].map(
-            normalizar_identificador
-        )
-
+        resultado["__TERMINAL"] = resultado[col_terminal].map(normalizar_identificador)
     if col_serial:
-
-        resultado[
-            "__SERIAL_COMISION"
-        ] = resultado[
-            col_serial
-        ].map(
-            normalizar_identificador
-        )
-
+        resultado["__SERIAL_COMISION"] = resultado[col_serial].map(normalizar_identificador)
     if col_equipo:
+        resultado["__EQUIPO_STD"] = resultado[col_equipo].map(estandarizar_equipo)
 
-        resultado[
-            "__EQUIPO_STD"
-        ] = resultado[
-            col_equipo
-        ].map(
-            estandarizar_equipo
-        )
-
-    resultado[
-        "__CONCATENAR"
-    ] = [
-
-        crear_concatenar(
-            afiliado,
-            terminal
-        )
-
-        for afiliado, terminal
-        in zip(
-
-            resultado[
-                "__AFILIADO"
-            ],
-
-            resultado[
-                "__TERMINAL"
-            ],
-
-        )
-
+    resultado["__CONCATENAR"] = [
+        crear_concatenar(afi, ter)
+        for afi, ter in zip(resultado["__AFILIADO"], resultado["__TERMINAL"])
     ]
 
-    # =====================================================
-    # DUPLICADOS
-    # =====================================================
-
-    duplicados = (
-
-        resultado[
-            "__CONCATENAR"
-        ].ne(
-            ""
-        )
-
-        & resultado.duplicated(
-            "__CONCATENAR",
-            keep=False
-        )
-
+    duplicado = (
+        resultado["__CONCATENAR"].ne("")
+        & resultado.duplicated("__CONCATENAR", keep=False)
     )
 
-    lista_monto = []
+    montos = []
+    seriales_r34 = []
+    estados_tx = []
+    access_lista = []
+    aplica_lista = []
+    motivos = []
 
-    lista_serial_r34 = []
-
-    lista_serial_terminal = []
-
-    lista_coincide = []
-
-    lista_tx = []
-
-    lista_access = []
-
-    lista_aplica_pago = []
-
-    lista_motivos = []
-
-    # =====================================================
-    # REVISAR FILA POR FILA
-    # =====================================================
-
-    for idx, row in resultado.iterrows():
-
-        clave = row.get(
-            "__CONCATENAR",
-            ""
-        )
-
-        equipo = estandarizar_equipo(
-
-            row.get(
-                "__EQUIPO_STD",
-                ""
-            )
-
-        )
-
-        serial_comision = (
-            normalizar_identificador(
-
-                row.get(
-                    "__SERIAL_COMISION",
-                    ""
-                )
-
-            )
-        )
-
-        registro_r34 = lookup.get(
-            clave
-        )
-
+    for idx, fila in resultado.iterrows():
+        clave = fila.get("__CONCATENAR", "")
+        equipo = estandarizar_equipo(fila.get("__EQUIPO_STD", ""))
+        serial_comision = normalizar_identificador(fila.get("__SERIAL_COMISION", ""))
         razones = []
 
-        # =================================================
-        # DUPLICADO
-        # =================================================
+        if duplicado.loc[idx]:
+            razones.append("Duplicado afiliado+terminal")
 
-        if duplicados.loc[
-            idx
-        ]:
-
-            razones.append(
-                "Duplicado afiliado+terminal"
-            )
-
-        # =================================================
-        # FALTA CLAVE
-        # =================================================
-
-        if not clave:
-
-            razones.append(
-                "Falta afiliado o terminal"
-            )
-
-        # =================================================
-        # N/A y N/D
-        # =================================================
-
-        if serial_comision in {
-            "N/A",
-            "N/D",
-            "NA",
-            "ND",
-        }:
-
-            razones.append(
-
-                f"Serial "
-                f"{serial_comision} "
-                f"requiere revisión AS400"
-
-            )
-
-        # =================================================
-        # CRUCE R34
-        # =================================================
+        registro_r34 = lookup.get(clave)
 
         if registro_r34 is None:
-
             monto = None
-
             serial_r34 = ""
-
-            serial_terminal = ""
-
-            coincide = (
-                "SIN COINCIDENCIA R34"
-            )
-
-            razones.append(
-                "No encontrado en R34"
-            )
-
+            razones.append("No encontrado en R34")
         else:
-
-            monto = registro_r34.get(
-                "__MONTO_TX"
-            )
-
-            serial_r34 = (
-                normalizar_identificador(
-
-                    registro_r34.get(
-                        "__SERIAL",
-                        ""
-                    )
-
-                )
-            )
-
-            serial_terminal = (
-                normalizar_identificador(
-
-                    registro_r34.get(
-                        "__SERIAL_DESDE_TERMINAL",
-                        ""
-                    )
-
-                )
-            )
-
-            # =============================================
-            # PINPAGOS
-            # =============================================
-
+            monto = registro_r34.get("__MONTO_TX")
             if equipo == "Pinpagos":
-
-                serial_referencia = (
-
-                    serial_terminal
-                    or
-                    serial_r34
-
+                serial_r34 = (
+                    registro_r34.get("__SERIAL_TERMINAL", "")
+                    or registro_r34.get("__SERIAL", "")
                 )
-
             else:
+                serial_r34 = registro_r34.get("__SERIAL", "")
 
-                serial_referencia = (
-                    serial_r34
-                )
+        serial_r34 = normalizar_identificador(serial_r34)
 
-            if (
-                not serial_comision
-                or serial_comision
-                in {
-                    "N/A",
-                    "N/D",
-                    "NA",
-                    "ND",
-                }
-            ):
+        if serial_comision in {"N/A", "N/D", "NA", "ND"}:
+            razones.append(f"Serial {serial_comision} requiere revisión AS400")
+        elif serial_comision and serial_r34 and serial_comision != serial_r34:
+            razones.append("Serial no coincide con R34")
 
-                coincide = "REVISAR"
-
-            elif (
-                serial_referencia
-                and serial_comision
-                == serial_referencia
-            ):
-
-                coincide = "SI"
-
-            elif serial_referencia:
-
-                coincide = "NO"
-
-                razones.append(
-                    "Serial no coincide con R34"
-                )
-
-            else:
-
-                coincide = (
-                    "SIN SERIAL R34"
-                )
-
-                razones.append(
-                    "R34 sin serial utilizable"
-                )
-
-        # =================================================
-        # TRANSACCIONES
-        # =================================================
-
-        tx = estado_transaccion(
-            monto
-        )
-
-        if tx in {
-            "N/A",
-            "REVISAR",
-            "REVISAR 1000",
-        }:
-
-            razones.append(
-                f"Estado de transacción: {tx}"
-            )
-
-        # =================================================
-        # ACCESS COMMERCE
-        # =================================================
+        tx = estado_transaccion(monto)
 
         if equipo == "Pinpagos":
-
-            # ***************
-            # REGLA ESPECIAL CONFIRMADA:
-            #
-            # PINPAGOS NO TIENE ACCESS COMMERCE.
-            #
-            # Si está CON_TX, puede aplicar pago.
-            # ***************
-
             access = "NO APLICA"
-
-            paga = (
-                tx == "CON_TX"
-            )
-
+            aplica = tx == "CON_TX"
         else:
+            access = "SI" if fila.get("__AFILIADO", "") in afiliados_access else "NO"
+            aplica = tx == "CON_TX" and access == "SI"
 
-            if (
-                row.get(
-                    "__AFILIADO",
-                    ""
-                )
-                in afiliados_access
-            ):
+        if tx in {"N/A", "REVISAR", "REVISAR 1000"}:
+            razones.append(f"Estado TX: {tx}")
 
-                access = "SI"
+        montos.append(monto)
+        seriales_r34.append(serial_r34)
+        estados_tx.append(tx)
+        access_lista.append(access)
+        aplica_lista.append("SI" if aplica else "NO")
+        motivos.append(" | ".join(dict.fromkeys(razones)))
 
-            else:
+    resultado["Monto_TX_R34"] = montos
+    resultado["Serial_R34"] = seriales_r34
+    resultado["Estado_TX"] = estados_tx
+    resultado["Access_Commerce_Calculado"] = access_lista
+    resultado["Aplica_Pago_Calculado"] = aplica_lista
+    resultado["Motivo_Revision"] = motivos
+    resultado["__REQUIERE_REVISION"] = resultado["Motivo_Revision"].astype(str).str.len() > 0
 
-                access = "NO"
-
-            paga = (
-
-                tx == "CON_TX"
-
-                and access == "SI"
-
-            )
-
-        lista_monto.append(
-            monto
-        )
-
-        lista_serial_r34.append(
-            serial_r34
-        )
-
-        lista_serial_terminal.append(
-            serial_terminal
-        )
-
-        lista_coincide.append(
-            coincide
-        )
-
-        lista_tx.append(
-            tx
-        )
-
-        lista_access.append(
-            access
-        )
-
-        if paga:
-
-            lista_aplica_pago.append(
-                "SI"
-            )
-
-        else:
-
-            lista_aplica_pago.append(
-                "NO"
-            )
-
-        lista_motivos.append(
-
-            " | ".join(
-
-                dict.fromkeys(
-                    razones
-                )
-
-            )
-
-        )
-
-    # =====================================================
-    # RESULTADOS
-    # =====================================================
-
-    resultado[
-        "Monto_TX_R34"
-    ] = lista_monto
-
-    resultado[
-        "Serial_R34"
-    ] = lista_serial_r34
-
-    resultado[
-        "Serial_Terminal_R34"
-    ] = lista_serial_terminal
-
-    resultado[
-        "Coincide_Serial_R34"
-    ] = lista_coincide
-
-    resultado[
-        "Estado_TX"
-    ] = lista_tx
-
-    resultado[
-        "Access_Commerce"
-    ] = lista_access
-
-    resultado[
-        "Aplica_Pago_Calculado"
-    ] = lista_aplica_pago
-
-    resultado[
-        "Fecha_Pago_Viernes"
-    ] = [
-
-        viernes_semana_actual()
-        if aplica == "SI"
-        else None
-
-        for aplica
-        in lista_aplica_pago
-
-    ]
-
-    resultado[
-        "Motivo_Revision"
-    ] = lista_motivos
-
-    resultado[
-        "__REQUIERE_REVISION"
-    ] = (
-
-        resultado[
-            "Motivo_Revision"
-        ]
-        .astype(
-            str
-        )
-        .str.len()
-        > 0
-
-    )
-
-    # =====================================================
-    # ACTUALIZAR COLUMNAS ORIGINALES
-    # =====================================================
-
-    if col_con_tx_original:
-
-        resultado[
-            col_con_tx_original
-        ] = resultado[
-            "Estado_TX"
-        ]
-
-    if col_access_original:
-
-        resultado[
-            col_access_original
-        ] = resultado[
-            "Access_Commerce"
-        ]
-
-    # =====================================================
-    # CAMBIAR ESTATUS A APLICA PAGO
-    # =====================================================
-
+    if col_tx:
+        resultado[col_tx] = resultado["Estado_TX"]
+    if col_access:
+        resultado[col_access] = resultado["Access_Commerce_Calculado"]
     if col_estatus:
-
-        mascara_paga = (
-
-            resultado[
-                "Aplica_Pago_Calculado"
-            ]
-            == "SI"
-
-        )
-
-        resultado.loc[
-
-            mascara_paga,
-
-            col_estatus
-
-        ] = "Aplica Pago"
+        mascara_pago = resultado["Aplica_Pago_Calculado"] == "SI"
+        resultado.loc[mascara_pago, col_estatus] = "Aplica Pago"
 
     return resultado
 
-
-# =========================================================
-# PROCESO GENERAL
-# =========================================================
-
 def procesar_todo(
-
     archivos_r34,
-
     archivos_ventas,
-
     archivo_comisiones,
-
     archivo_access,
-
-    chunksize=100_000,
-
+    chunksize=100_000
 ):
+    archivo_comisiones.seek(0)
+    bytes_comisiones = archivo_comisiones.getvalue()
 
-    # =====================================================
-    # R34
-    # =====================================================
+    r34, detalle_r34 = procesar_r34(archivos_r34, chunksize)
+    comisiones = preparar_comisiones(archivo_comisiones)
+    cantidad_original = len(comisiones)
 
-    (
-        r34,
-        detalle_r34,
-        avisos_r34,
-    ) = procesar_r34(
+    ventas, ventas_excluidas, ventas_duplicadas, advertencias = preparar_ventas(archivos_ventas)
 
-        archivos_r34,
-
-        chunksize,
-
-    )
-
-    # =====================================================
-    # VENTAS
-    # =====================================================
-
-    (
-        ventas,
-        ventas_excluidas,
-        ventas_duplicadas,
-        avisos_ventas,
-    ) = preparar_ventas(
-
-        archivos_ventas
-
-    )
-
-    # =====================================================
-    # COMISIONES
-    # =====================================================
-
-    comisiones = preparar_comisiones(
-        archivo_comisiones
-    )
-
-    # =====================================================
-    # ACCESS
-    # =====================================================
-
-    (
-        access_df,
-        afiliados_access,
-    ) = preparar_access(
-        archivo_access
-    )
-
-    # =====================================================
-    # VENTAS NUEVAS
-    # =====================================================
-
-    (
-        combinado,
-        ventas_nuevas,
-        ventas_ya_existentes,
-    ) = integrar_ventas(
-
+    combinado, ventas_nuevas, ventas_existentes = integrar_ventas(
         comisiones,
-
-        ventas,
-
+        ventas
     )
 
-    # =====================================================
-    # R34 + ACCESS + VALIDACIONES
-    # =====================================================
-
-    final = recalcular_comisiones(
-
-        combinado,
-
-        r34,
-
-        afiliados_access,
-
-    )
+    access_df, afiliados_access = preparar_access(archivo_access)
+    final = recalcular_comisiones(combinado, r34, afiliados_access)
 
     return {
-
-        "final":
-            final,
-
-        "r34":
-            r34,
-
-        "detalle_r34":
-            detalle_r34,
-
-        "access_df":
-            access_df,
-
-        "afiliados_access":
-            afiliados_access,
-
-        "ventas_limpias":
-            ventas,
-
-        "ventas_nuevas":
-            ventas_nuevas,
-
-        "ventas_ya_existentes":
-            ventas_ya_existentes,
-
-        "ventas_excluidas":
-            ventas_excluidas,
-
-        "ventas_duplicadas":
-            ventas_duplicadas,
-
-        "advertencias":
-            avisos_r34
-            +
-            avisos_ventas,
-
+        "final": final,
+        "r34": r34,
+        "detalle_r34": detalle_r34,
+        "ventas_nuevas": ventas_nuevas,
+        "ventas_existentes": ventas_existentes,
+        "ventas_excluidas": ventas_excluidas,
+        "ventas_duplicadas": ventas_duplicadas,
+        "advertencias": advertencias,
+        "afiliados_access": afiliados_access,
+        "cantidad_original": cantidad_original,
+        "bytes_comisiones_original": bytes_comisiones,
     }
 
-
-# =========================================================
-# QUITAR COLUMNAS INTERNAS
-# =========================================================
-
-def limpiar_columnas_internas(
-    df
-):
-
-    if df is None:
-
-        return pd.DataFrame()
-
-    if df.empty:
-
-        return df.copy()
-
-    columnas = [
-
+def columnas_originales(df):
+    return [
         col
-
         for col in df.columns
-
-        if not str(
-            col
-        ).startswith(
-            "__"
-        )
-
+        if not str(col).startswith("__")
+        and col not in {
+            "Monto_TX_R34",
+            "Serial_R34",
+            "Estado_TX",
+            "Access_Commerce_Calculado",
+            "Aplica_Pago_Calculado",
+            "Motivo_Revision",
+        }
     ]
 
-    return df[
-        columnas
-    ].copy()
+def copiar_estilo_fila(ws, fila_origen, fila_destino, max_col):
+    for col in range(1, max_col + 1):
+        origen = ws.cell(row=fila_origen, column=col)
+        destino = ws.cell(row=fila_destino, column=col)
 
+        if origen.has_style:
+            destino._style = copy(origen._style)
+        if origen.number_format:
+            destino.number_format = origen.number_format
+        if origen.font:
+            destino.font = copy(origen.font)
+        if origen.fill:
+            destino.fill = copy(origen.fill)
+        if origen.border:
+            destino.border = copy(origen.border)
+        if origen.alignment:
+            destino.alignment = copy(origen.alignment)
+        if origen.protection:
+            destino.protection = copy(origen.protection)
 
-# =========================================================
-# GENERAR EXCEL FINAL
-# =========================================================
+def generar_excel_resultado(resultados):
+    datos_originales = resultados["bytes_comisiones_original"]
+    wb = load_workbook(io.BytesIO(datos_originales))
 
-def generar_excel_resultado(
-    resultados
-):
+    if "VENTAS" not in wb.sheetnames:
+        raise ValueError("El archivo original ya no contiene la hoja VENTAS.")
+
+    ws = wb["VENTAS"]
+    final = resultados["final"].copy()
+    columnas = columnas_originales(final)
+
+    encabezados = {}
+    for celda in ws[1]:
+        if celda.value is not None:
+            encabezados[str(celda.value)] = celda.column
+
+    coincidencias_fila_1 = sum(1 for col in columnas if col in encabezados)
+    fila_encabezado = 1
+
+    if coincidencias_fila_1 < 3:
+        mejor_fila = 1
+        mejor_puntaje = -1
+
+        for fila in range(1, min(ws.max_row, 10) + 1):
+            valores = {
+                str(ws.cell(row=fila, column=col).value): col
+                for col in range(1, ws.max_column + 1)
+                if ws.cell(row=fila, column=col).value is not None
+            }
+            puntaje = sum(1 for columna in columnas if columna in valores)
+            if puntaje > mejor_puntaje:
+                mejor_puntaje = puntaje
+                mejor_fila = fila
+                encabezados = valores
+
+        fila_encabezado = mejor_fila
+
+    primera_fila_datos = fila_encabezado + 1
+    ultima_fila_existente = ws.max_row
+
+    for fila in range(primera_fila_datos, ultima_fila_existente + 1):
+        for col in range(1, ws.max_column + 1):
+            ws.cell(row=fila, column=col).value = None
+
+    fila_estilo = primera_fila_datos
+
+    for indice, (_, registro) in enumerate(final.iterrows()):
+        fila_excel = primera_fila_datos + indice
+
+        if fila_excel != fila_estilo:
+            copiar_estilo_fila(
+                ws,
+                fila_estilo,
+                fila_excel,
+                ws.max_column
+            )
+
+        for columna in columnas:
+            if columna not in encabezados:
+                continue
+
+            numero_columna = encabezados[columna]
+            valor = registro.get(columna)
+
+            if pd.isna(valor):
+                valor = None
+
+            ws.cell(
+                row=fila_excel,
+                column=numero_columna
+            ).value = valor
 
     salida = io.BytesIO()
-
-    final = limpiar_columnas_internas(
-
-        resultados[
-            "final"
-        ]
-
-    )
-
-    revision = limpiar_columnas_internas(
-
-        resultados[
-            "final"
-        ][
-
-            resultados[
-                "final"
-            ][
-                "__REQUIERE_REVISION"
-            ]
-
-        ].copy()
-
-    )
-
-    with pd.ExcelWriter(
-
-        salida,
-
-        engine="openpyxl",
-
-    ) as writer:
-
-        final.to_excel(
-
-            writer,
-
-            sheet_name=
-                "Comisiones_Procesadas",
-
-            index=False,
-
-        )
-
-        revision.to_excel(
-
-            writer,
-
-            sheet_name=
-                "Revision_Manual",
-
-            index=False,
-
-        )
-
-        limpiar_columnas_internas(
-
-            resultados[
-                "ventas_nuevas"
-            ]
-
-        ).to_excel(
-
-            writer,
-
-            sheet_name=
-                "Ventas_Nuevas",
-
-            index=False,
-
-        )
-
-        limpiar_columnas_internas(
-
-            resultados[
-                "ventas_ya_existentes"
-            ]
-
-        ).to_excel(
-
-            writer,
-
-            sheet_name=
-                "Ventas_Ya_Existentes",
-
-            index=False,
-
-        )
-
-        limpiar_columnas_internas(
-
-            resultados[
-                "ventas_excluidas"
-            ]
-
-        ).to_excel(
-
-            writer,
-
-            sheet_name=
-                "Ventas_Excluidas",
-
-            index=False,
-
-        )
-
-        limpiar_columnas_internas(
-
-            resultados[
-                "ventas_duplicadas"
-            ]
-
-        ).to_excel(
-
-            writer,
-
-            sheet_name=
-                "Duplicados_Ventas",
-
-            index=False,
-
-        )
-
-    salida.seek(
-        0
-    )
-
+    wb.save(salida)
+    salida.seek(0)
     return salida.getvalue()
+
