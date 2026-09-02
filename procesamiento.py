@@ -13,7 +13,7 @@ from openpyxl import load_workbook
 
 from reglas_comisiones import estandarizar_equipo
 
-VERSION_PROCESAMIENTO = "3.0-NUEVO"
+VERSION_PROCESAMIENTO = "3.2-HOJAS-FIJAS"
 
 
 HOJA_COMISIONES = "VENTAS"
@@ -471,6 +471,10 @@ def nombre_mes_cierre(fecha):
 
 
 def leer_excel_general(archivo):
+    """
+    Lee la primera y única hoja del archivo.
+    Se usa para Access Commerce.
+    """
     archivo.seek(0)
 
     return pd.read_excel(
@@ -480,7 +484,33 @@ def leer_excel_general(archivo):
     )
 
 
+def leer_excel_ventas(archivo):
+    """
+    El Reporte de Ventas siempre se lee
+    desde la hoja VENTAS.
+    """
+    archivo.seek(0)
+
+    try:
+        return pd.read_excel(
+            archivo,
+            sheet_name="VENTAS",
+            dtype=object,
+            engine="openpyxl",
+        )
+
+    except ValueError:
+        raise ValueError(
+            f"No encontré la hoja 'VENTAS' "
+            f"en el Reporte de Ventas: {archivo.name}"
+        )
+
+
 def obtener_hoja_comisiones(archivo):
+    """
+    El archivo real de Comisiones siempre
+    trabaja con la hoja VENTAS.
+    """
     archivo.seek(0)
 
     excel = pd.ExcelFile(
@@ -488,18 +518,13 @@ def obtener_hoja_comisiones(archivo):
         engine="openpyxl"
     )
 
-    if HOJA_COMISIONES in excel.sheet_names:
-        return HOJA_COMISIONES
+    if HOJA_COMISIONES not in excel.sheet_names:
+        raise ValueError(
+            "No encontré la hoja 'VENTAS' "
+            "en el archivo de Comisiones."
+        )
 
-    # Esto permite probar con una muestra que tenga una sola hoja,
-    # sin cambiar la regla del archivo real.
-    if len(excel.sheet_names) == 1:
-        return excel.sheet_names[0]
-
-    raise ValueError(
-        "No encontré la hoja 'VENTAS' "
-        "en el archivo de Comisiones."
-    )
+    return HOJA_COMISIONES
 
 
 def leer_excel_comisiones(archivo):
@@ -1093,7 +1118,7 @@ def preparar_ventas(
     advertencias = []
 
     for archivo in archivos_ventas:
-        df = leer_excel_general(
+        df = leer_excel_ventas(
             archivo
         )
 
@@ -1132,14 +1157,16 @@ def preparar_ventas(
 
         if col_afiliado is None:
             raise ValueError(
-                f"No encontré AFILIADO "
-                f"en {archivo.name}."
+                f"Estoy leyendo la hoja 'VENTAS' de {archivo.name}, "
+                f"pero no encontré una columna llamada AFILIADO "
+                f"(o uno de sus nombres equivalentes)."
             )
 
         if col_terminal is None:
             raise ValueError(
-                f"No encontré TERMINAL "
-                f"en {archivo.name}."
+                f"Estoy leyendo la hoja 'VENTAS' de {archivo.name}, "
+                f"pero no encontré una columna llamada TERMINAL "
+                f"(o uno de sus nombres equivalentes)."
             )
 
         df[
@@ -2636,4 +2663,3 @@ def generar_excel_resultado(
     salida.seek(0)
 
     return salida.getvalue()
-
