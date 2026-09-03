@@ -16,7 +16,7 @@ import pandas as pd
 
 from reglas_comisiones import estandarizar_equipo
 
-VERSION_PROCESAMIENTO = "3.3-EXPORTACION-LIGERA"
+VERSION_PROCESAMIENTO = "3.4-PROPIEDAD-CREDICARDPOS"
 
 
 HOJA_COMISIONES = "VENTAS"
@@ -132,6 +132,10 @@ ALIASES = {
 
     "canal": [
         "CANAL",
+    ],
+
+    "propiedad": [
+        "PROPIEDAD",
     ],
 
     "canal_venta": [
@@ -1153,9 +1157,9 @@ def preparar_ventas(
             "preafiliado"
         )
 
-        col_ag = buscar_columna(
+        col_propiedad = buscar_columna(
             df,
-            "ag_autorizado"
+            "propiedad"
         )
 
         if col_afiliado is None:
@@ -1252,31 +1256,37 @@ def preparar_ventas(
                 "__MOTIVO_EXCLUSION"
             ] = "Pre-afiliado"
 
-        # La guía dice que las ventas de AG Autorizados
-        # deben excluirse, pero el reporte de ejemplo no
-        # trae una columna explícita con ese indicador.
-        # No inventamos una condición.
-        if col_ag:
-            mascara_ag = df[
-                col_ag
-            ].map(
-                valor_es_si
+        # =================================================
+        # PROPIEDAD
+        # =================================================
+        # Regla confirmada:
+        # En el Reporte de Ventas solo deben entrar
+        # las filas cuya PROPIEDAD sea CREDICARDPOS.
+        # AGENTE AUTORIZADO queda excluido.
+        if col_propiedad is None:
+            raise ValueError(
+                f"No encontré la columna PROPIEDAD "
+                f"en la hoja VENTAS de {archivo.name}."
             )
 
-            df.loc[
-                mascara_ag
-                & df[
-                    "__MOTIVO_EXCLUSION"
-                ].eq(""),
+        propiedad_normalizada = df[
+            col_propiedad
+        ].map(
+            normalizar_texto
+        )
+
+        mascara_no_credicard = (
+            propiedad_normalizada
+            != "CREDICARDPOS"
+        )
+
+        df.loc[
+            mascara_no_credicard
+            & df[
                 "__MOTIVO_EXCLUSION"
-            ] = "AG Autorizado"
-        else:
-            advertencias.append(
-                f"{archivo.name}: el reporte no trae "
-                f"una columna explícita para identificar "
-                f"AG Autorizados; esa exclusión no se "
-                f"aplicó automáticamente."
-            )
+            ].eq(""),
+            "__MOTIVO_EXCLUSION"
+        ] = "Propiedad distinta de CREDICARDPOS"
 
         excluidas.append(
             df[
