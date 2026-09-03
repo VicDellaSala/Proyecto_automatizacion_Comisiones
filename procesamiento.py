@@ -16,7 +16,7 @@ import pandas as pd
 
 from reglas_comisiones import estandarizar_equipo
 
-VERSION_PROCESAMIENTO = "3.5-VENTAS-O-COLOCACIONES"
+VERSION_PROCESAMIENTO = "3.6-EXCLUYE-SIMCARD"
 
 
 HOJA_COMISIONES = "VENTAS"
@@ -1277,6 +1277,31 @@ def preparar_ventas(
             mascara_terminal_0,
             "__MOTIVO_EXCLUSION"
         ] = "Terminal = 0 / No Simcard"
+
+        # =================================================
+        # EQUIPO = SIMCARD
+        # =================================================
+        # Regla adicional:
+        # aunque TERMINAL no sea 0, si EQUIPO viene como
+        # SIMCARD la venta debe excluirse.
+        if col_equipo:
+            mascara_simcard = (
+                df[
+                    col_equipo
+                ].map(
+                    normalizar_texto
+                ).eq(
+                    "SIMCARD"
+                )
+            )
+
+            df.loc[
+                mascara_simcard
+                & df[
+                    "__MOTIVO_EXCLUSION"
+                ].eq(""),
+                "__MOTIVO_EXCLUSION"
+            ] = "Equipo = SIMCARD"
 
         if col_pre:
             mascara_pre = df[
@@ -3410,4 +3435,3 @@ def generar_excel_resultado(
 
             except OSError:
                 pass
-
