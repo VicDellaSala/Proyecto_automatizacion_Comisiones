@@ -16,7 +16,7 @@ import pandas as pd
 
 from reglas_comisiones import estandarizar_equipo
 
-VERSION_PROCESAMIENTO = "3.4-PROPIEDAD-CREDICARDPOS"
+VERSION_PROCESAMIENTO = "3.5-VENTAS-O-COLOCACIONES"
 
 
 HOJA_COMISIONES = "VENTAS"
@@ -493,24 +493,63 @@ def leer_excel_general(archivo):
 
 def leer_excel_ventas(archivo):
     """
-    El Reporte de Ventas siempre se lee
-    desde la hoja VENTAS.
+    El Reporte de Ventas puede venir en una hoja
+    llamada VENTAS o COLOCACIONES.
+
+    Prioridad:
+    1. VENTAS
+    2. COLOCACIONES
     """
     archivo.seek(0)
 
-    try:
-        return pd.read_excel(
-            archivo,
-            sheet_name="VENTAS",
-            dtype=object,
-            engine="openpyxl",
+    excel = pd.ExcelFile(
+        archivo,
+        engine="openpyxl"
+    )
+
+    hojas_disponibles = {
+        str(hoja).strip().upper():
+            hoja
+        for hoja in excel.sheet_names
+    }
+
+    hoja_encontrada = None
+
+    for candidata in [
+        "VENTAS",
+        "COLOCACIONES",
+    ]:
+        if candidata in hojas_disponibles:
+            hoja_encontrada = (
+                hojas_disponibles[
+                    candidata
+                ]
+            )
+            break
+
+    if hoja_encontrada is None:
+        raise ValueError(
+            f"No encontré una hoja válida "
+            f"en el Reporte de Ventas: "
+            f"{archivo.name}. "
+            f"Debe existir una hoja llamada "
+            f"VENTAS o COLOCACIONES."
         )
 
-    except ValueError:
-        raise ValueError(
-            f"No encontré la hoja 'VENTAS' "
-            f"en el Reporte de Ventas: {archivo.name}"
-        )
+    archivo.seek(0)
+
+    df = pd.read_excel(
+        archivo,
+        sheet_name=hoja_encontrada,
+        dtype=object,
+        engine="openpyxl",
+    )
+
+    df.attrs[
+        "hoja_origen_ventas"
+    ] = hoja_encontrada
+
+    return df
 
 
 def obtener_hoja_comisiones(archivo):
