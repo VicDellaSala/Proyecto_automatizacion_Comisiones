@@ -16,7 +16,7 @@ import pandas as pd
 
 from reglas_comisiones import estandarizar_equipo, aplicar_motor_comisiones
 
-VERSION_PROCESAMIENTO = "4.3-DETECCION-BANCARIBE"
+VERSION_PROCESAMIENTO = "4.4-ALIAS-TESORO-OCCIDENTE"
 
 
 HOJA_COMISIONES = "VENTAS"

@@ -123,6 +123,43 @@ class MotorComisionesTests(unittest.TestCase):
 
 
 class AplicacionMotorTests(unittest.TestCase):
+    def test_variantes_jornada_tesoro_palabras_completas(self):
+        from reglas_comisiones import identificar_jornada
+        for texto in ['JORNADA TESORO CORO', 'JORNADA BANCO DEL TESORO',
+                      'JORNADA BANCO TESORO', 'JORNADA TESORO',
+                      ' jornada   tesoro localidad ficticia ']:
+            self.assertIs(identificar_jornada('TESORO', texto), True)
+            self.assertIsNot(identificar_jornada('OTRO BANCO', texto), True)
+        for texto in ['BANCO TESORO', 'TESORO', 'PREJORNADA TESORO', 'JORNADA TESOROS']:
+            self.assertIsNot(identificar_jornada('TESORO', texto), True)
+
+    def test_alias_occidente_exacto_y_salida_original(self):
+        self.assertEqual(normalizar_agente('  occidente '), 'REGION OCCIDENTE')
+        for valor in ['AGENTE OCCIDENTE', 'OCCIDENTE NUEVO', 'OCCIDENTES']:
+            self.assertIsNone(normalizar_agente(valor))
+        for canal in ['OCCIDENTE', 'REGION OCCIDENTE']:
+            base = self.base()
+            base['CANAL'], base['ESTATUS CXC'] = canal, 'AL CONTADO'
+            base['VENDEDOR AGENTE AUTORIZADO'] = ''
+            r = self.aplicar(base).iloc[0]
+            self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], canal)
+            self.assertEqual(r['MONTO COMISION AGENTE AUTORIZADO $'], 25)
+            self.assertEqual(r['MONTO TOTAL A PAGAR $'], 25)
+            self.assertFalse(r['__REQUIERE_REVISION'])
+
+    def test_jornada_coro_conserva_repartos_comodato(self):
+        for equipo, total, agente in [('Castle', 20, 10), ('Zappy', 25, 15)]:
+            base = self.base()
+            base['BANCO'], base['CANAL'] = 'TESORO', 'CENTRO TIPO II'
+            base['CANAL DE VENTA (JORNADA QUE PERTENECE)'] = 'JORNADA TESORO CORO'
+            base['EQUIPO'], base['VENDEDOR AGENTE AUTORIZADO'] = equipo, ''
+            r = self.aplicar(base).iloc[0]
+            self.assertEqual(r['MONTO COMISION BANCO $'], 10)
+            self.assertEqual(r['MONTO COMISION AGENTE AUTORIZADO $'], agente)
+            self.assertEqual(r['MONTO TOTAL A PAGAR $'], total)
+            self.assertEqual(r['__DIFERENCIA_CUADRE_COMISION'], 0)
+            self.assertFalse(r['__REQUIERE_REVISION'])
+
     def base(self, origen='VENTAS_NUEVAS'):
         return pd.DataFrame({
             'EQUIPO': ['Castle Dynamo'], 'ESTATUS CXC': ['COMODATO'],

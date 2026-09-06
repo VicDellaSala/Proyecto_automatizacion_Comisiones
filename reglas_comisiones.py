@@ -110,7 +110,8 @@ def _beneficiario(valor):
 
 def normalizar_agente(valor):
     texto = normalizar_texto(_texto(valor))
-    aliases = {'CREDICARDPOSGRANPRO': 'GRANPRO', 'INVERSIONES TPOS': 'INV TPOS'}
+    aliases = {'CREDICARDPOSGRANPRO': 'GRANPRO', 'INVERSIONES TPOS': 'INV TPOS',
+               'OCCIDENTE': 'REGION OCCIDENTE'}
     if texto in aliases:
         return aliases[texto]
     if texto in AGENTES_16 or texto in TARIFAS_CONTADO:
@@ -209,9 +210,7 @@ def separar_vendedor_banco(valor):
 
 def identificar_jornada(banco, canal):
     texto = normalizar_texto(_texto(canal))
-    equivalentes = {'JORNADA BANCO TESORO', 'JORNADA BANCO DEL TESORO',
-                    'JORNADA DEL TESORO', 'JORNADA TESORO'}
-    if texto in equivalentes:
+    if re.search(r'\bJORNADA\b', texto) and re.search(r'\bTESORO\b', texto):
         return True if _banco(banco) == 'BANCO DEL TESORO' else None
     if not texto or re.search(r'\bJORNADA\b', texto):
         return None

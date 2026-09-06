@@ -10,7 +10,7 @@ from procesamiento import (
 from reglas_comisiones import PRECIOS_BASE
 
 
-VERSION_APP = "4.3-DETECCION-BANCARIBE"
+VERSION_APP = "4.4-ALIAS-TESORO-OCCIDENTE"
 
 
 st.set_page_config(
