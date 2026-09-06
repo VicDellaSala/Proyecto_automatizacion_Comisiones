@@ -10,7 +10,7 @@ from procesamiento import (
 from reglas_comisiones import PRECIOS_BASE
 
 
-VERSION_APP = "3.0"
+VERSION_APP = "3.1-ACCESS-EXACTO"
 
 
 st.set_page_config(
@@ -35,6 +35,7 @@ CLAVES_RESULTADO = {
     "ventas_duplicadas",
     "advertencias",
     "afiliados_access",
+    "columna_afiliado_access",
     "cantidad_original",
     "bytes_comisiones_original",
     "hoja_comisiones",
@@ -358,6 +359,8 @@ else:
                 "resultados"
             ]
 
+        st.session_state.pop("excel_final_generado", None)
+
         try:
             with st.spinner(
                 "Procesando R34 por bloques, "
@@ -517,6 +520,16 @@ if "resultados" in st.session_state:
     f.metric(
         "Revisión manual",
         revision
+    )
+
+    st.metric(
+        "Filas con coincidencia verificada en Access",
+        int(final["__ACCESS_CALCULADO"].eq("SI").sum()),
+    )
+    st.caption(
+        f"Columna de Access utilizada: {resultados['columna_afiliado_access']}. "
+        "El contador verifica el archivo cargado por afiliado; excluye Pinpagos. "
+        "Los valores históricos de filas no pendientes se conservan en el libro."
     )
 
     if duplicadas:
@@ -818,6 +831,8 @@ if "resultados" in st.session_state:
             resultados[
                 "final"
             ] = recalculado
+
+            st.session_state.pop("excel_final_generado", None)
 
             st.session_state[
                 "resultados"

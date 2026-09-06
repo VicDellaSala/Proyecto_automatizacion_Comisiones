@@ -16,7 +16,7 @@ import pandas as pd
 
 from reglas_comisiones import estandarizar_equipo
 
-VERSION_PROCESAMIENTO = "3.6-EXCLUYE-SIMCARD"
+VERSION_PROCESAMIENTO = "3.7-ACCESS-EXACTO"
 
 
 HOJA_COMISIONES = "VENTAS"
@@ -1794,6 +1794,38 @@ def integrar_ventas(
     )
 
 
+def normalizar_afiliado_access(valor):
+    """Normaliza sin quitar ceros iniciales ni convertir a float.
+
+    Los marcadores de datos ausentes no son evidencia de afiliación.
+    No se infieren longitudes ni equivalencias de ceros a la izquierda.
+    """
+    texto = re.sub(r"\s+", "", normalizar_identificador(valor))
+    if texto.upper() in {"", "N/A", "N/D", "NA", "ND", "NAN", "NONE", "-"}:
+        return ""
+    if re.fullmatch(r"[+-]?\d+\.0+", texto):
+        return texto.split(".")[0]
+    return texto
+
+
+def columna_afiliado_access(df, origen="Access Commerce"):
+    """Exige un único alias completo; nunca busca por subcadenas."""
+    aliases = {normalizar_nombre_columna(a) for a in ALIASES["afiliado"]}
+    candidatas = [
+        col for col in df.columns
+        # pandas añade .1, .2, etc. a encabezados duplicados de Excel.
+        if not str(col).startswith("__")
+        and normalizar_nombre_columna(re.sub(r"\.\d+$", "", str(col))) in aliases
+    ]
+    if len(candidatas) != 1:
+        raise ValueError(
+            f"{origen}: se necesita una columna AFILIADO inequívoca "
+            f"(o un alias exacto existente). Candidatas: {candidatas}. "
+            "Confirma la columna correcta; no se usarán coincidencias parciales."
+        )
+    return candidatas[0]
+
+
 def preparar_access(
     archivo_access
 ):
@@ -1801,23 +1833,15 @@ def preparar_access(
         archivo_access
     )
 
-    col_afiliado = buscar_columna(
-        df,
-        "afiliado"
-    )
-
-    if col_afiliado is None:
-        raise ValueError(
-            "No encontré la columna AFILIADO "
-            "en Access Commerce."
-        )
+    col_afiliado = columna_afiliado_access(df)
+    df.attrs["columna_afiliado_access"] = col_afiliado
 
     df[
         "__AFILIADO"
     ] = df[
         col_afiliado
     ].map(
-        normalizar_identificador
+        normalizar_afiliado_access
     )
 
     afiliados = set(
@@ -1952,6 +1976,14 @@ def recalcular_comisiones(
     mes_r34=None,
 ):
     resultado = df.copy()
+
+    col_afiliado_cruce = columna_afiliado_access(resultado, "Comisiones")
+    afiliados_access = {
+        normalizado for valor in afiliados_access
+        if (normalizado := normalizar_afiliado_access(valor))
+    }
+    afiliados_cruce = resultado[col_afiliado_cruce].map(normalizar_afiliado_access)
+    access_verificado = afiliados_cruce.ne("") & afiliados_cruce.isin(afiliados_access)
 
     lookup = crear_lookup_r34(
         r34
@@ -2091,6 +2123,11 @@ def recalcular_comisiones(
     motivos = []
 
     for idx, fila in resultado.iterrows():
+        equipo_access = estandarizar_equipo(fila.get("__EQUIPO_STD", ""))
+        access = (
+            "NO APLICA" if equipo_access == "Pinpagos"
+            else "SI" if access_verificado.loc[idx] else "NO"
+        )
         estatus = normalizar_texto(
             fila.get(
                 "__ESTATUS_NORMALIZADO",
@@ -2126,14 +2163,8 @@ def recalcular_comisiones(
                 else ""
             )
 
-            access_lista.append(
-                fila.get(
-                    col_access,
-                    ""
-                )
-                if col_access
-                else ""
-            )
+            # El histórico público se conserva; el cálculo refleja este Access.
+            access_lista.append(access)
 
             aplica_lista.append("")
             motivos.append("")
@@ -2248,19 +2279,6 @@ def recalcular_comisiones(
             )
 
         else:
-            afiliado = normalizar_identificador(
-                fila.get(
-                    "__AFILIADO",
-                    ""
-                )
-            )
-
-            access = (
-                "SI"
-                if afiliado in afiliados_access
-                else "NO"
-            )
-
             aplica = (
                 estado_tx == "CON_TX"
                 and access == "SI"
@@ -2479,6 +2497,9 @@ def procesar_todo(
 
         "afiliados_access":
             afiliados_access,
+
+        "columna_afiliado_access":
+            access_df.attrs["columna_afiliado_access"],
 
         "cantidad_original":
             cantidad_original,
