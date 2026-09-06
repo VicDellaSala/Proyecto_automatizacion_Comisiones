@@ -16,7 +16,7 @@ import pandas as pd
 
 from reglas_comisiones import estandarizar_equipo
 
-VERSION_PROCESAMIENTO = "3.8-IDENTIDAD-MAESTRO"
+VERSION_PROCESAMIENTO = "3.9-OBSERVACION-TX"
 
 
 HOJA_COMISIONES = "VENTAS"
@@ -212,6 +212,11 @@ ALIASES = {
         "CON_TX",
         "ESTADO TX",
         "ESTATUS TX",
+    ],
+
+    "observacion": [
+        "OBSERVACION",
+        "OBSERVACIONES",
     ],
 
     "access": [
@@ -1925,6 +1930,112 @@ def crear_lookup_r34(r34):
     return lookup
 
 
+def normalizar_estado_tx(valor):
+    """Unifica etiquetas conocidas sin fusionar estados ni reinterpretar montos."""
+    if valor is None or pd.isna(valor):
+        return ""
+    texto = normalizar_texto(str(valor).replace("_", " "))
+    texto = re.sub(r"\s*/\s*", "/", texto)
+    equivalencias = {
+        "": "", "CON TX": "CON_TX", "SIN TX": "SIN TX",
+        "C/P SIN TX": "C/P SIN TX", "C P SIN TX": "C/P SIN TX",
+        "DESINSTALADO": "DESINSTALADO", "DESINTALADO": "DESINSTALADO",
+        "N/A": "N/A", "N A": "N/A", "NA": "N/A",
+        "N/D": "N/D", "N D": "N/D", "ND": "N/D",
+        "REVISAR 1000": "REVISAR 1000", "REVISAR": "REVISAR",
+    }
+    return equivalencias.get(texto, valor)
+
+
+def calcular_observacion(estado_tx, access, equipo, validacion=None):
+    """Texto sugerido por las reglas confirmadas; nunca cambia ESTATUS."""
+    tx = normalizar_estado_tx(estado_tx)
+    if tx in {"N/A", "N/D"} or normalizar_estado_tx(validacion) in {"N/A", "N/D"}:
+        return "PENDIENTE POR VALIDAR"
+    if tx in {"SIN TX", "C/P SIN TX"}:
+        return "NO CUMPLE EL CRITERIO DE PAGO"
+    if tx == "CON_TX":
+        if estandarizar_equipo(equipo) == "Pinpagos" or normalizar_texto(access) == "SI":
+            return "POR PAGAR"
+        if normalizar_texto(access) == "NO":
+            return "NO POSEE REGISTRO DE OPERADORES ACCESS COMERCES"
+    # No inferir una condición de pago para 1000, desinstalados u otros estados.
+    return ""
+
+
+def combinar_observacion(actual, sugerida, automatica_anterior=""):
+    """Elige el texto sin concatenarlo ni sobrescribir notas históricas/manuales.
+
+    Solo una nota generada y registrada en esta sesión puede recalcularse.
+    Al volver a cargar un libro, cualquier texto existente se trata como histórico.
+    """
+    tiene_texto = actual is not None and not pd.isna(actual) and bool(str(actual).strip())
+    if tiene_texto and actual != automatica_anterior:
+        return actual, ""
+    return sugerida, sugerida
+
+
+def columna_observacion_comisiones(df):
+    candidatas = columnas_publicas_comisiones(df, "observacion")
+    if len(candidatas) <= 1:
+        return candidatas[0] if candidatas else None
+    columnas = [c for c in df.columns if not str(c).startswith("__")]
+    originales = df.attrs.get("encabezados_comisiones", {})
+    encabezados = [normalizar_nombre_columna(originales.get(c, c)) for c in columnas]
+    operativas = [columnas[i] for i in range(1, len(columnas) - 1)
+                  if columnas[i] in candidatas
+                  and encabezados[i - 1] == "ESTATUS"
+                  and encabezados[i + 1] == "MES DE CIERRE"]
+    if len(operativas) != 1:
+        raise ValueError("Comisiones: no se reconoce una OBSERVACION operativa única junto a ESTATUS.")
+    return operativas[0]
+
+
+def actualizar_observaciones(resultado, lookup, filas_evaluadas):
+    """Completa la observación operativa sin escribir ESTATUS ni pagos.
+
+    El origen de las filas ya viene identificado en __ORIGEN. Se conservan
+    tanto las notas del maestro como las notas manuales de ventas nuevas.
+    La marca automática solo permite actualizar textos creados en esta sesión.
+    """
+    col_obs = columna_observacion_comisiones(resultado)
+    if col_obs is None:
+        return
+    if "__OBSERVACION_AUTOMATICA" not in resultado:
+        resultado["__OBSERVACION_AUTOMATICA"] = ""
+    resultado["__OBSERVACION_AUTOMATICA"] = resultado["__OBSERVACION_AUTOMATICA"].fillna("")
+
+    for idx in filas_evaluadas:
+        fila = resultado.loc[idx]
+        registro = lookup.get(fila["__CONCATENAR"], {})
+        tx = estado_transaccion(registro.get("__MONTO_TX"))
+        serial_r34 = registro.get("__SERIAL_R34", "")
+        if fila["__EQUIPO_STD"] == "Pinpagos":
+            serial_r34 = registro.get("__SERIAL_TERMINAL_R34", "") or serial_r34
+        valores_validacion = [fila.get(c, "") for c in
+                              ("__AFILIADO", "__TERMINAL", "__SERIAL_COMISION")]
+        valores_validacion.append(serial_r34)
+        validacion = next((normalizar_estado_tx(v) for v in valores_validacion
+                           if normalizar_estado_tx(v) in {"N/A", "N/D"}), None)
+        sugerida = calcular_observacion(tx, fila["__ACCESS_CALCULADO"], fila["__EQUIPO_STD"], validacion)
+        texto, automatica = combinar_observacion(
+            fila[col_obs], sugerida, fila["__OBSERVACION_AUTOMATICA"],
+        )
+        resultado.at[idx, col_obs] = texto
+        resultado.at[idx, "__OBSERVACION_AUTOMATICA"] = automatica
+
+        motivo = ""
+        if validacion or tx in {"N/A", "N/D"}:
+            motivo = "Validación N/A o N/D: pendiente por validar"
+        elif tx in {"REVISAR", "REVISAR 1000"}:
+            motivo = f"Estado TX: {tx}"
+        if motivo:
+            anterior = resultado.at[idx, "__MOTIVO_REVISION"]
+            partes = [s for s in str(anterior or "").split(" | ") if s]
+            resultado.at[idx, "__MOTIVO_REVISION"] = " | ".join(dict.fromkeys(partes + [motivo]))
+            resultado.at[idx, "__REQUIERE_REVISION"] = True
+
+
 def estado_transaccion(monto):
     if (
         monto is None
@@ -2015,11 +2126,12 @@ def recalcular_comisiones(
         preferir_ultima=True
     )
 
-    col_tx = buscar_columna(
-        resultado,
-        "con_tx",
-        preferir_ultima=True
-    )
+    columnas_tx = columnas_publicas_comisiones(resultado, "con_tx")
+    if len(columnas_tx) > 1:
+        raise ValueError("Comisiones: varias columnas CON TX; confirma la columna operativa.")
+    col_tx = columnas_tx[0] if columnas_tx else None
+    if col_tx:
+        resultado[col_tx] = resultado[col_tx].map(normalizar_estado_tx)
 
     col_access = buscar_columna(
         resultado,
@@ -2111,6 +2223,10 @@ def recalcular_comisiones(
     access_lista = []
     aplica_lista = []
     motivos = []
+    filas_observacion = []
+    observacion_en_validacion = resultado.get(
+        "__OBSERVACION_EN_VALIDACION", pd.Series(False, index=resultado.index),
+    ).fillna(False)
 
     for idx, fila in resultado.iterrows():
         equipo_access = estandarizar_equipo(fila.get("__EQUIPO_STD", ""))
@@ -2132,6 +2248,9 @@ def recalcular_comisiones(
             estatus == "PENDIENTE"
             or fila.get("__ORIGEN") == "VENTAS_NUEVAS"
         )
+
+        if es_pendiente or (estatus == "APLICA PAGO" and observacion_en_validacion.loc[idx]):
+            filas_observacion.append(idx)
 
         if not es_pendiente:
             montos.append(
@@ -2373,6 +2492,9 @@ def recalcular_comisiones(
         .str.len()
         > 0
     )
+
+    resultado["__OBSERVACION_EN_VALIDACION"] = resultado.index.isin(filas_observacion)
+    actualizar_observaciones(resultado, lookup, filas_observacion)
 
     return resultado
 

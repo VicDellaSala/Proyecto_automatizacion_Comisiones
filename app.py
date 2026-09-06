@@ -10,7 +10,7 @@ from procesamiento import (
 from reglas_comisiones import PRECIOS_BASE
 
 
-VERSION_APP = "3.2-IDENTIDAD-MAESTRO"
+VERSION_APP = "3.3-OBSERVACION-TX"
 
 
 st.set_page_config(

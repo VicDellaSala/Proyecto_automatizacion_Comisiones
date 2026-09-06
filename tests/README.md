@@ -1,4 +1,4 @@
-# Pruebas de Access Commerce
+# Pruebas de procesamiento
 
 Ejecutar desde la raíz, con las dependencias de requirements.txt instaladas:
 
@@ -32,13 +32,27 @@ CREDICARDPOS CDM después de normalizar mayúsculas y espacios. Las pruebas
 verifican positivos y negativos repartidos entre varios chunks.
 
 El contador de UI refleja filas verificadas contra el Access cargado y excluye
-Pinpagos. Las columnas públicas de registros no pendientes mantienen sus valores
-históricos; no se reabren pagos ni se modifica la regla provisional de pagos.
+Pinpagos. Los registros no pendientes conservan sus valores históricos de Access;
+no se reabren pagos ni se modifica la regla provisional de pagos.
 
-Fuera de alcance: mapeo temporal TX, observaciones,
-pagos y motor de comisiones. Durante las pruebas se observó además que el
-buscador genérico puede confundir ESTATUS con una columna TX cuando falta
-CON TX; esa ruta ajena a Access queda pendiente y no se modificó.
+OBSERVACION se identifica junto a ESTATUS y MES DE CIERRE, conservando la
+observación del bloque CXC. Las notas históricas y manuales se preservan
+literalmente. Solo las notas automáticas identificadas en la sesión pueden
+recalcularse. Al cargar nuevamente un libro, todo texto existente es histórico.
+Los casos N/A o N/D se señalan para revisión aunque conserven una nota anterior.
+Las observaciones no modifican ESTATUS, fechas ni componentes de comisión.
+
+La generación se aplica a pendientes y ventas nuevas, y continúa durante la
+sesión para esas filas si pasan a Aplica Pago. La generación sobre celdas vacías
+de registros previamente PAGADO/DESINSTALADO queda pendiente de confirmación.
+No se inventa una observación de pago para REVISAR 1000 o estados desconocidos.
+
+CON TX se normaliza también en filas históricas: las variantes conocidas se
+unifican, manteniendo separados N/A, N/D, SIN TX y C/P SIN TX. Se conserva el texto
+de etiquetas desconocidas. La columna se resuelve mediante encabezados exactos
+para que su ausencia nunca provoque escribir etiquetas TX en ESTATUS.
+
+Fuera de alcance: mapeo temporal TX y nuevas reglas de distribución de pagos.
 
 Los sufijos TX mensuales se conservan como parte del encabezado; no se equipara
 la columna con _1 a la columna sin sufijo. No se asignan meses hasta confirmar
