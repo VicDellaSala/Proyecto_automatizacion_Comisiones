@@ -15,17 +15,32 @@ del mismo libro por ZIP/XML, conservando las otras partes y una fórmula.
 No constituye una validación de memoria con libros grandes ni de apertura
 en Microsoft Excel.
 
-Pendiente para cerrar la prioridad 1: archivo real de Access Commerce,
-confirmación de su columna exacta y ejemplos conocidos de un afiliado presente
-y otro ausente. Se conservan los alias exactos existentes; encabezados
-ambiguos detienen el procesamiento en lugar de elegir una columna por posición.
+Access se cruza por su columna AFILIADO, con aliases exactos y sin coincidencias
+parciales. Sus encabezados ambiguos siguen deteniendo el procesamiento.
 No se asume que 00123 equivale a 123 ni se reconstruyen ceros perdidos en Excel.
+
+En Comisiones se conservan los encabezados originales asociados a las posiciones
+del DataFrame. El bloque operativo reconocido es CONCATENAR, AFILIADO, TERMINAL,
+FECHA, VENDEDOR, EQUIPO, SERIAL. Se usa en preparación, comparación de ventas,
+R34, Access y revalidación. Los bloques auxiliares existentes se conservan.
+Los tests usan bloques con valores ficticios diferentes para detectar una
+selección incorrecta que quedaría oculta si ambas columnas fueran iguales.
+Un diseño desconocido con identidades repetidas requiere confirmación.
+
+La lista blanca R34 acepta únicamente CREDICARD POS, CREDICARDPOS y
+CREDICARDPOS CDM después de normalizar mayúsculas y espacios. Las pruebas
+verifican positivos y negativos repartidos entre varios chunks.
 
 El contador de UI refleja filas verificadas contra el Access cargado y excluye
 Pinpagos. Las columnas públicas de registros no pendientes mantienen sus valores
 históricos; no se reabren pagos ni se modifica la regla provisional de pagos.
 
-Fuera de alcance: lista de PERTENENCIA R34, mapeo temporal TX, observaciones,
+Fuera de alcance: mapeo temporal TX, observaciones,
 pagos y motor de comisiones. Durante las pruebas se observó además que el
 buscador genérico puede confundir ESTATUS con una columna TX cuando falta
 CON TX; esa ruta ajena a Access queda pendiente y no se modificó.
+
+Los sufijos TX mensuales se conservan como parte del encabezado; no se equipara
+la columna con _1 a la columna sin sufijo. No se asignan meses hasta confirmar
+el significado de _1. Los archivos de entrada reales se analizan desde sus
+rutas originales, fuera del repositorio, sin incorporarlos a fixtures o logs.

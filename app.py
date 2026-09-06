@@ -10,7 +10,7 @@ from procesamiento import (
 from reglas_comisiones import PRECIOS_BASE
 
 
-VERSION_APP = "3.1-ACCESS-EXACTO"
+VERSION_APP = "3.2-IDENTIDAD-MAESTRO"
 
 
 st.set_page_config(
@@ -572,8 +572,8 @@ if "resultados" in st.session_state:
             )
 
             st.write(
-                f"Filas cuya PERTENENCIA "
-                f"contiene CredicardPos: "
+                f"Filas con PERTENENCIA "
+                f"en la lista permitida: "
                 f"{detalle.get('filas_credicardpos', 0):,}"
             )
 

@@ -16,10 +16,13 @@ import pandas as pd
 
 from reglas_comisiones import estandarizar_equipo
 
-VERSION_PROCESAMIENTO = "3.7-ACCESS-EXACTO"
+VERSION_PROCESAMIENTO = "3.8-IDENTIDAD-MAESTRO"
 
 
 HOJA_COMISIONES = "VENTAS"
+PERTENENCIAS_R34_VALIDAS = frozenset({
+    "CREDICARD POS", "CREDICARDPOS", "CREDICARDPOS CDM",
+})
 
 
 ALIASES = {
@@ -580,12 +583,15 @@ def leer_excel_comisiones(archivo):
 
     archivo.seek(0)
 
-    df = pd.read_excel(
-        archivo,
-        sheet_name=hoja,
-        dtype=object,
-        engine="openpyxl",
-    )
+    with pd.ExcelFile(archivo, engine="openpyxl") as excel:
+        df = pd.read_excel(excel, sheet_name=hoja, dtype=object)
+        encabezados = pd.read_excel(
+            excel, sheet_name=hoja, header=None, nrows=1, dtype=object,
+        ).iloc[0].tolist()
+
+    # Conservar la relación posición/encabezado original antes de usar los
+    # nombres únicos que pandas asigna a las columnas repetidas.
+    df.attrs["encabezados_comisiones"] = dict(zip(df.columns, encabezados))
 
     df.attrs[
         "hoja_origen"
@@ -781,14 +787,7 @@ def procesar_csv_r34(
             .map(normalizar_texto)
         )
 
-        # El R34 real contiene valores como:
-        # CREDICARDPOS CDM
-        # CREDICARDPOS OCCIDENT CDM
-        # Por eso NO debe compararse con igualdad exacta.
-        mascara = pertenencia.str.contains(
-            "CREDICARDPOS",
-            na=False,
-        )
+        mascara = pertenencia.isin(PERTENENCIAS_R34_VALIDAS)
 
         filtrado = chunk.loc[
             mascara
@@ -1020,6 +1019,43 @@ def procesar_r34(
     return r34, detalles
 
 
+def columnas_publicas_comisiones(df, tipo):
+    """Aliases completos sobre encabezados originales, sin columnas internas."""
+    originales = df.attrs.get("encabezados_comisiones", {})
+    aliases = {normalizar_nombre_columna(a) for a in ALIASES.get(tipo, [])}
+    return [col for col in df.columns if not str(col).startswith("__")
+            and normalizar_nombre_columna(originales.get(col, col)) in aliases]
+
+
+def resolver_identidad_comisiones(df):
+    """Reconoce el bloque operativo inspeccionado, no la última columna .1.
+
+    Los bloques auxiliares se conservan. Un diseño desconocido con varias
+    identidades requiere confirmación, en vez de elegir por valores o posición.
+    """
+    columnas = [c for c in df.columns if not str(c).startswith("__")]
+    originales = df.attrs.get("encabezados_comisiones", {})
+    encabezados = [normalizar_nombre_columna(originales.get(c, c)) for c in columnas]
+    bloque = ["CONCATENAR", "AFILIADO", "TERMINAL", "FECHA", "VENDEDOR", "EQUIPO", "SERIAL"]
+    inicios = [i for i in range(len(encabezados) - len(bloque) + 1)
+               if encabezados[i:i + len(bloque)] == bloque]
+    if len(inicios) == 1:
+        inicio = inicios[0]
+        return {tipo: columnas[inicio + offset] for tipo, offset in
+                {"concatenar": 0, "afiliado": 1, "terminal": 2, "equipo": 5, "serial": 6}.items()}
+    if len(inicios) > 1:
+        raise ValueError("Comisiones: hay varios bloques operativos de identidad; confirma cuál utilizar.")
+
+    # Compatibilidad con maestros simples que tienen una única identidad.
+    identidad = {"afiliado": columna_afiliado_access(df, "Comisiones")}
+    for tipo in ("terminal", "equipo", "serial", "concatenar"):
+        candidatas = columnas_publicas_comisiones(df, tipo)
+        if len(candidatas) > 1:
+            raise ValueError(f"Comisiones: varias columnas de {tipo} sin un bloque operativo reconocido.")
+        identidad[tipo] = candidatas[0] if candidatas else None
+    return identidad
+
+
 def preparar_comisiones(
     archivo_comisiones
 ):
@@ -1033,33 +1069,11 @@ def preparar_comisiones(
 
     df["__ORIGEN"] = "COMISIONES"
 
-    # En el ejemplo real existen columnas repetidas
-    # CONCATENAR y SERIAL. Para la lógica principal
-    # preferimos la última, que corresponde al bloque
-    # principal de la hoja VENTAS.
-    col_afiliado = buscar_columna(
-        df,
-        "afiliado",
-        preferir_ultima=True
-    )
-
-    col_terminal = buscar_columna(
-        df,
-        "terminal",
-        preferir_ultima=True
-    )
-
-    col_serial = buscar_columna(
-        df,
-        "serial",
-        preferir_ultima=True
-    )
-
-    col_equipo = buscar_columna(
-        df,
-        "equipo",
-        preferir_ultima=True
-    )
+    identidad = resolver_identidad_comisiones(df)
+    col_afiliado = identidad["afiliado"]
+    col_terminal = identidad["terminal"]
+    col_serial = identidad["serial"]
+    col_equipo = identidad["equipo"]
 
     col_estatus = buscar_columna(
         df,
@@ -1476,6 +1490,7 @@ def crear_filas_nuevas(
         columns=comisiones.columns,
         dtype=object,
     )
+    nuevas.attrs = comisiones.attrs.copy()
 
     # Primero copiamos columnas que tengan
     # exactamente el mismo nombre normalizado.
@@ -1486,7 +1501,9 @@ def crear_filas_nuevas(
             continue
 
         destino_norm = normalizar_nombre_columna(
-            columna_destino
+            comisiones.attrs.get("encabezados_comisiones", {}).get(
+                columna_destino, columna_destino
+            )
         )
 
         for columna_origen in ventas_nuevas.columns:
@@ -1499,20 +1516,9 @@ def crear_filas_nuevas(
                 columna_origen
             )
 
-            # pandas agrega .1 a nombres duplicados.
-            origen_norm = re.sub(
-                r"\s+\d+$",
-                "",
-                origen_norm
-            )
-
-            destino_base = re.sub(
-                r"\s+\d+$",
-                "",
-                destino_norm
-            )
-
-            if destino_base == origen_norm:
+            # Los sufijos mensuales (_1, _2...) son parte del encabezado.
+            # Su mapeo temporal queda pendiente de especificación.
+            if destino_norm == origen_norm:
                 nuevas[
                     columna_destino
                 ] = ventas_nuevas[
@@ -1541,9 +1547,10 @@ def crear_filas_nuevas(
     ]
 
     for tipo_destino, tipo_origen in mapeos:
-        columnas_destino = buscar_columnas(
-            comisiones,
-            tipo_destino
+        columnas_destino = (
+            columnas_publicas_comisiones(comisiones, tipo_destino)
+            if tipo_destino in {"afiliado", "terminal", "serial", "equipo"}
+            else buscar_columnas(comisiones, tipo_destino)
         )
 
         columna_origen = buscar_columna(
@@ -1568,7 +1575,7 @@ def crear_filas_nuevas(
 
     # CONCATENAR se calcula, no se confía en la fórmula
     # del reporte.
-    for columna in buscar_columnas(
+    for columna in columnas_publicas_comisiones(
         comisiones,
         "concatenar"
     ):
@@ -1579,7 +1586,7 @@ def crear_filas_nuevas(
         ].values
 
     # Serial auxiliar y serial principal
-    for columna in buscar_columnas(
+    for columna in columnas_publicas_comisiones(
         comisiones,
         "serial"
     ):
@@ -1779,6 +1786,7 @@ def integrar_ventas(
         ignore_index=True,
         sort=False,
     )
+    combinado.attrs = comisiones.attrs.copy()
 
     combinado[
         "__ROW_ID"
@@ -1977,7 +1985,8 @@ def recalcular_comisiones(
 ):
     resultado = df.copy()
 
-    col_afiliado_cruce = columna_afiliado_access(resultado, "Comisiones")
+    identidad = resolver_identidad_comisiones(resultado)
+    col_afiliado_cruce = identidad["afiliado"]
     afiliados_access = {
         normalizado for valor in afiliados_access
         if (normalizado := normalizar_afiliado_access(valor))
@@ -1989,29 +1998,10 @@ def recalcular_comisiones(
         r34
     )
 
-    col_afiliado = buscar_columna(
-        resultado,
-        "afiliado",
-        preferir_ultima=True
-    )
-
-    col_terminal = buscar_columna(
-        resultado,
-        "terminal",
-        preferir_ultima=True
-    )
-
-    col_serial = buscar_columna(
-        resultado,
-        "serial",
-        preferir_ultima=True
-    )
-
-    col_equipo = buscar_columna(
-        resultado,
-        "equipo",
-        preferir_ultima=True
-    )
+    col_afiliado = identidad["afiliado"]
+    col_terminal = identidad["terminal"]
+    col_serial = identidad["serial"]
+    col_equipo = identidad["equipo"]
 
     col_estatus = buscar_columna(
         resultado,

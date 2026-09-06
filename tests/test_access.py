@@ -26,10 +26,10 @@ class AccessTests(unittest.TestCase):
 
     def test_presentes_ausentes_y_ceros_en_excel(self):
         _, afiliados = p.preparar_access(archivo_excel(pd.DataFrame({
-            "AFILIADO": [88014324, "88014325.0", " 88014326 ", "00123", "88014324"],
+            "AFILIADO": [101, "102.0", " 103 ", "00123", "101"],
             "CONCATENAR": ["999", "999", "999", "999", "999"],
         })))
-        self.assertEqual(afiliados, {"88014324", "88014325", "88014326", "00123"})
+        self.assertEqual(afiliados, {"101", "102", "103", "00123"})
         self.assertNotIn("123", afiliados)
         self.assertNotIn("999", afiliados)
 
