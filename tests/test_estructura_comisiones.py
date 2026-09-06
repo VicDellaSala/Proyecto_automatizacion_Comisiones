@@ -95,6 +95,17 @@ class EstructuraComisionesTests(unittest.TestCase):
         self.assertEqual(wb['VENTAS']['K3'].value, '4442')
         self.assertEqual(wb['OTRA']['A1'].value, '=1+1')
 
+    def test_modalidad_reporte_alimenta_cxc_solo_en_nuevas(self):
+        base = p.preparar_comisiones(maestro_ficticio())
+        base['ESTATUS CXC'] = 'COMODATO'
+        ventas = pd.DataFrame({'AFILIADO': ['444'], 'TERMINAL': [2],
+            'EQUIPO': ['Castle Dynamo'], '__AFILIADO': ['444'], '__TERMINAL': ['2'],
+            '__CONCATENAR': ['4442'], '__EQUIPO_STD': ['Castle Dynamo'],
+            'DECONTADO / FINANCIAMIENTO': ['al contado']})
+        nuevas = p.crear_filas_nuevas(ventas, base)
+        self.assertEqual(nuevas.loc[0, 'ESTATUS CXC'], 'AL CONTADO')
+        self.assertEqual(base.loc[0, 'ESTATUS CXC'], 'COMODATO')
+
     def test_sufijo_tx_se_conserva_sin_inferir_periodo(self):
         base = p.preparar_comisiones(maestro_ficticio())
         columnas = ['Monto_Trans_Acum_bs_mes', 'Monto_Trans_Acum_bs_mes_1']

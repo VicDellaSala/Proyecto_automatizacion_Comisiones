@@ -63,11 +63,14 @@ advertencia, requiere_revision, diferencia y monto_pendiente_asignacion.
 El cuadre usa aritmética decimal: diferencia = componentes menos total.
 No se extrapolan bancos o agentes desconocidos ni se inventan beneficiarios.
 Un rol FREELANCER explícito puede tomar el nombre de VENDEDOR; un nombre libre
-sin rol no autoriza esa inferencia. OFICINA/Tesoro sigue requiriendo aclaración
-si no hay evidencia explícita de jornada.
+sin rol no autoriza esa inferencia. Persona/Bancaribe en VENDEDOR identifica
+ambos roles; otros bancos o más componentes requieren revisión. OFICINA/Tesoro
+no aplica reparto de Jornada. Jornada exige coincidencia de BANCO y canal.
 
-Las ventas nuevas sin importes se completan únicamente cuando no hay dudas.
-Los importes ya presentes, incluidos ceros e históricos vacíos/incompletos,
+Las filas sin importes se completan únicamente cuando no hay dudas.
+ESTATUS CXC define la modalidad. CANAL/VENDEDOR solo identifican agentes mediante
+equivalencias confirmadas; un beneficiario desconocido conserva el cálculo interno
+y requiere revisión. Los importes ya presentes, incluidos ceros y repartos parciales,
 se conservan y se comparan con la regla; no se corrige el total silenciosamente.
 La interfaz muestra la regla, los montos pendientes y los descuadres. El motor
 no escribe ESTATUS, TX, Access, observaciones ni fechas de pago.

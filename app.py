@@ -10,7 +10,7 @@ from procesamiento import (
 from reglas_comisiones import PRECIOS_BASE
 
 
-VERSION_APP = "4.0-MOTOR-COMISIONES"
+VERSION_APP = "4.1-MODALIDAD-CXC"
 
 
 st.set_page_config(
@@ -548,7 +548,7 @@ if "resultados" in st.session_state:
             })
             st.dataframe(detalle_comisiones.astype("string").fillna(""), hide_index=True, use_container_width=True)
             st.caption("Los importes históricos se conservan. Las diferencias requieren revisión; "
-                       "las ventas nuevas se completan cuando la regla y los beneficiarios están definidos.")
+                       "las filas sin importes se completan cuando la regla y los beneficiarios están definidos.")
 
     if duplicadas:
         st.info(

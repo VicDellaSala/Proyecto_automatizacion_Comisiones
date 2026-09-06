@@ -86,7 +86,7 @@ class MotorComisionesTests(unittest.TestCase):
         self.assertEqual((r['monto_freelance'], r['monto_total']), (10, 10))
         r = self.calcular(vendedor_agente='', vendedor_freelance='Persona ficticia / Bancaribe')
         self.assertEqual((r['monto_banco'], r['monto_freelance'], r['monto_total']), (10, 10, 20))
-        self.assertEqual(r['vendedor_freelance'], 'Persona ficticia')
+        self.assertEqual(r['vendedor_freelance'], 'PERSONA FICTICIA')
         self.assertTrue(self.calcular(vendedor_agente='', vendedor_freelance='Persona ficticia / Otro banco')['requiere_revision'])
         self.assertTrue(self.calcular(vendedor_freelance='Persona ficticia')['requiere_revision'])
 
@@ -125,7 +125,7 @@ class MotorComisionesTests(unittest.TestCase):
 class AplicacionMotorTests(unittest.TestCase):
     def base(self, origen='VENTAS_NUEVAS'):
         return pd.DataFrame({
-            'EQUIPO': ['Castle Dynamo'], 'ESQUEMA COMERCIAL': ['COMODATO'],
+            'EQUIPO': ['Castle Dynamo'], 'ESTATUS CXC': ['COMODATO'],
             'FECHA': [date(2026, 8, 1)], 'VENDEDOR AGENTE AUTORIZADO': ['Agente ficticio'],
             'MONTO COMISION AGENTE AUTORIZADO $': [None],
             'VENDEDOR BANCO': [None], 'MONTO COMISION BANCO $': [None],
@@ -159,13 +159,87 @@ class AplicacionMotorTests(unittest.TestCase):
         self.assertEqual(final.loc[0, '__DIFERENCIA_CUADRE_COMISION'], 5)
         self.assertTrue(final.loc[0, '__REQUIERE_REVISION'])
 
-    def test_no_inventa_beneficiario_ni_completa_historico_vacio(self):
+    def test_no_inventa_beneficiario_y_completa_maestro_vacio(self):
         base = self.base()
         base['VENDEDOR AGENTE AUTORIZADO'] = ['']
         final = self.aplicar(base)
         self.assertTrue(pd.isna(final.loc[0, 'MONTO TOTAL A PAGAR $']))
         self.assertEqual(final.loc[0, '__MONTO_PENDIENTE_ASIGNACION'], 20)
+        self.assertEqual(final.loc[0, '__TOTAL_COMISION_CALCULADO'], 20)
         self.assertTrue(final.loc[0, '__REQUIERE_REVISION'])
         final = self.aplicar(self.base('COMISIONES'))
-        self.assertTrue(pd.isna(final.loc[0, 'MONTO TOTAL A PAGAR $']))
-        self.assertTrue(final.loc[0, '__REQUIERE_REVISION'])
+        self.assertEqual(final.loc[0, 'MONTO TOTAL A PAGAR $'], 20)
+        self.assertFalse(final.loc[0, '__REQUIERE_REVISION'])
+
+    def test_modalidad_cxc_y_ventas_normales(self):
+        casos = [('COMODATO', 'Castle', '2026-08-01', 'Región Centro', 20),
+                 ('COMODATO', 'Zappy', '2026-07-14', 'Región Centro', 20),
+                 ('COMODATO', 'Zappy', '2026-07-15', 'Región Centro', 25),
+                 ('COMODATO', 'Pinpagos', '2026-06-30', 'Región Centro', 10),
+                 ('COMODATO', 'Pinpagos', '2026-07-01', 'Región Centro', 15),
+                 *[('AL CONTADO', 'Castle', None, a, 25) for a in
+                   ['Región Centro', 'Región Oriente', 'Región Occidente']],
+                 ('AL CONTADO', 'Castle', None, 'Centro Tipo II', 50),
+                 ('AL CONTADO', 'Castle', None, 'GranPro', 38.4),
+                 ('AL CONTADO', 'Zappy', None, 'Virtualnet', 36)]
+        for modo, equipo, fecha, agente, total in casos:
+            with self.subTest(modo=modo, equipo=equipo, agente=agente):
+                base = self.base()
+                base['ESTATUS CXC'], base['EQUIPO'], base['FECHA'] = modo, equipo, fecha
+                base['ESQUEMA COMERCIAL'] = 'CONTRADICTORIO'
+                base['VENDEDOR AGENTE AUTORIZADO'], base['CANAL'] = '', agente
+                r = self.aplicar(base).iloc[0]
+                self.assertEqual(r['MONTO TOTAL A PAGAR $'], total)
+                self.assertEqual(r['MONTO COMISION AGENTE AUTORIZADO $'], total)
+                self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], agente)
+                self.assertEqual(r['__DIFERENCIA_CUADRE_COMISION'], 0)
+
+    def test_vendedor_barra_desde_columna_original(self):
+        for vendedor, valido in [(' Persona Ficticia / bancaribe ', True),
+                                 ('Persona / Otro Banco', False), ('Persona / Bancaribe / Otro', False)]:
+            base = self.base()
+            base['VENDEDOR AGENTE AUTORIZADO'] = ''
+            base['VENDEDOR'] = vendedor
+            r = self.aplicar(base).iloc[0]
+            if valido:
+                self.assertEqual(r['MONTO TOTAL A PAGAR $'], 20)
+                self.assertEqual(r['MONTO COMISION BANCO $'], 10)
+                self.assertEqual(r['MONTO COMISION VENDEDOR/FREELANCE $'], 10)
+                self.assertEqual(r['VENDEDOR / FREELANCE'], 'PERSONA FICTICIA')
+            else:
+                self.assertTrue(r['__REQUIERE_REVISION'])
+                self.assertTrue(pd.isna(r['MONTO TOTAL A PAGAR $']))
+
+    def test_jornada_requiere_banco_y_canal(self):
+        for canal, banco, esperado in [('Jornada Banco Tesoro', 'Tesoro', 10),
+                                       (' jornada del tesoro ', 'Banco del Tesoro', 10),
+                                       ('OFICINA', 'Tesoro', None),
+                                       ('Jornada Banco Tesoro', 'Otro', 'revision'),
+                                       ('JORNADA DESCONOCIDA', 'Tesoro', 'revision')]:
+            base = self.base()
+            base['BANCO'], base['CANAL DE VENTA (JORNADA QUE PERTENECE)'] = banco, canal
+            r = self.aplicar(base).iloc[0]
+            if esperado == 'revision':
+                self.assertTrue(r['__REQUIERE_REVISION'])
+                self.assertTrue(pd.isna(r['MONTO TOTAL A PAGAR $']))
+            else:
+                self.assertEqual(r['MONTO TOTAL A PAGAR $'], 20)
+                self.assertEqual(r['MONTO COMISION BANCO $'], esperado)
+
+    def test_no_sustituye_cxc_invalido_por_estatus_o_esquema(self):
+        base = self.base()
+        base['ESTATUS CXC'] = ''
+        base['ESQUEMA COMERCIAL'] = base['ESTATUS'] = 'COMODATO'
+        r = self.aplicar(base).iloc[0]
+        self.assertTrue(r['__REQUIERE_REVISION'])
+        self.assertTrue(pd.isna(r['MONTO TOTAL A PAGAR $']))
+
+    def test_barra_con_rol_freelancer_y_revalidacion(self):
+        base = self.base()
+        base['VENDEDOR AGENTE AUTORIZADO'] = ''
+        base['CANAL'] = 'FREELANCER'
+        base['VENDEDOR'] = 'Persona Ficticia / Bancaribe'
+        final = self.aplicar(base)
+        self.assertEqual(final.loc[0, 'MONTO TOTAL A PAGAR $'], 20)
+        repetido = self.aplicar(final)
+        pd.testing.assert_frame_equal(final, repetido)

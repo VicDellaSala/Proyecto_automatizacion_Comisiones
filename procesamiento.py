@@ -16,7 +16,7 @@ import pandas as pd
 
 from reglas_comisiones import estandarizar_equipo, aplicar_motor_comisiones
 
-VERSION_PROCESAMIENTO = "4.0-MOTOR-COMISIONES"
+VERSION_PROCESAMIENTO = "4.1-MODALIDAD-CXC"
 
 
 HOJA_COMISIONES = "VENTAS"
@@ -1637,6 +1637,14 @@ def crear_filas_nuevas(
             ] = ventas_nuevas[
                 origen_esquema
             ].values
+
+    # La modalidad del reporte alimenta CXC solo en filas nuevas.
+    columnas_cxc = [c for c in comisiones.columns
+                   if normalizar_texto(c) == 'ESTATUS CXC']
+    if origen_esquema and len(columnas_cxc) == 1:
+        nuevas[columnas_cxc[0]] = ventas_nuevas[origen_esquema].map(
+            lambda v: normalizar_texto(v) if normalizar_texto(v) in {'COMODATO', 'AL CONTADO'} else ''
+        ).values
 
     # MES DE CIERRE desde FECHA REPORTE
     columnas_mes = buscar_columnas(

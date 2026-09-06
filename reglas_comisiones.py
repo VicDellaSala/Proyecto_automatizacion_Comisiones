@@ -199,6 +199,25 @@ def _banco(valor):
             'BANCARIBE': 'BANCARIBE'}.get(normalizar_texto(_texto(valor)))
 
 
+def separar_vendedor_banco(valor):
+    """La barra indica persona/banco; solo Bancaribe tiene reparto confirmado."""
+    partes = [normalizar_texto(p) for p in _texto(valor).split('/')]
+    if len(partes) != 2 or not _beneficiario(partes[0]) or partes[1] != 'BANCARIBE':
+        raise ValueError('Vendedor/banco sin reparto confirmado; requiere revisión.')
+    return partes[0], 'BANCARIBE'
+
+
+def identificar_jornada(banco, canal):
+    texto = normalizar_texto(_texto(canal))
+    equivalentes = {'JORNADA BANCO TESORO', 'JORNADA BANCO DEL TESORO',
+                    'JORNADA DEL TESORO', 'JORNADA TESORO'}
+    if texto in equivalentes:
+        return True if _banco(banco) == 'BANCO DEL TESORO' else None
+    if not texto or re.search(r'\bJORNADA\b', texto):
+        return None
+    return False
+
+
 def calcular_comision(*, equipo, modalidad, fecha, canal='', banco='', es_jornada=None,
                        vendedor_banco='', vendedor_freelance='', vendedor_agente='', precios=None,
                        es_freelance=False):
@@ -220,12 +239,10 @@ def calcular_comision(*, equipo, modalidad, fecha, canal='', banco='', es_jornad
         if modo == 'COMODATO' and _fecha_tarifa(fecha) is None:
             raise ValueError('FECHA de la venta vacía o inválida; no se asigna tarifa.')
         if '/' in r['vendedor_freelance']:
-            partes = [s.strip() for s in r['vendedor_freelance'].split('/')]
-            if len(partes) != 2 or not partes[0] or _banco(partes[1]) != 'BANCARIBE':
-                raise ValueError('Freelancer/banco sin reparto confirmado.')
+            persona, banco_persona = separar_vendedor_banco(r['vendedor_freelance'])
             if r['vendedor_banco'] and _banco(r['vendedor_banco']) != 'BANCARIBE':
                 raise ValueError('Bancos contradictorios en el reparto de freelance.')
-            r['vendedor_freelance'], r['vendedor_banco'] = partes[0], 'BANCARIBE'
+            r['vendedor_freelance'], r['vendedor_banco'] = persona, banco_persona
         if r['vendedor_freelance'] or es_freelance:
             if r['vendedor_agente'] or es_jornada is True:
                 raise ValueError('Combinación de freelance con agente/jornada no definida.')
@@ -271,7 +288,7 @@ def calcular_comision(*, equipo, modalidad, fecha, canal='', banco='', es_jornad
                 r['monto_agente'] = float(total)
             if not r['vendedor_agente']:
                 r['monto_pendiente_asignacion'] = r['monto_agente']
-                avisos.append(f"Beneficiario comercial pendiente de asignar: {r['monto_agente']:.2f} USD.")
+                avisos.append(f"Beneficiario no identificado: {r['monto_agente']:.2f} USD pendientes de asignar.")
         r['monto_total'], r['regla_aplicada'] = float(total), regla
         cuadre = validar_cuadre(r['monto_banco'], r['monto_freelance'], r['monto_agente'], r['monto_total'])
         r['diferencia'] = cuadre['diferencia']
@@ -287,7 +304,7 @@ def calcular_comision(*, equipo, modalidad, fecha, canal='', banco='', es_jornad
 
 
 def aplicar_motor_comisiones(df, precios=None):
-    """Completa nuevas sin importes; audita históricos sin reemplazarlos.
+    """Completa filas sin importes; audita importes existentes sin reemplazarlos.
 
     Toda tarifa/distribución reside en este módulo. Los encabezados originales
     permiten distinguir FECHA de otras fechas y conservar el orden del maestro.
@@ -316,10 +333,11 @@ def aplicar_motor_comisiones(df, precios=None):
         return resultado  # Compatibilidad con maestros sin bloque de comisiones.
     if not all(destinos.values()):
         raise ValueError('Comisiones: falta parte del bloque de distribución; no se reconstruirá el libro.')
-    entradas = dict(equipo=columna('EQUIPO'), modalidad=columna('ESQUEMA COMERCIAL', 'DECONTADO / FINANCIAMIENTO'),
+    entradas = dict(equipo=columna('EQUIPO'), modalidad=columna('ESTATUS CXC'),
                     fecha=columna('FECHA'), banco=columna('BANCO'))
     canales = [columna('CANAL'), columna('CANAL DE VENTA (JORNADA QUE PERTENECE)')]
     vendedor = columna('VENDEDOR')
+    agente_origen = columna('AGENTE AUTORIZADO')
     montos = ['monto_banco', 'monto_freelance', 'monto_agente', 'monto_total']
     for nombre in ('__REGLA_COMISION', '__ADVERTENCIA_COMISION'):
         resultado[nombre] = ''
@@ -334,22 +352,48 @@ def aplicar_motor_comisiones(df, precios=None):
         for k in ('vendedor_banco', 'vendedor_freelance', 'vendedor_agente'):
             datos[k] = _beneficiario(fila[destinos[k]])
         contextos = [_texto(fila.get(c)) for c in canales if c]
+        vendedor_original = _beneficiario(fila.get(vendedor)) if vendedor else ''
+        candidatos = contextos + [vendedor_original]
+        if agente_origen:
+            candidatos.append(_beneficiario(fila.get(agente_origen)))
+        # Solo nombres/alias de agentes confirmados, nunca personas libres ni oficinas.
+        agentes = {normalizar_agente(v): v for v in candidatos if normalizar_agente(v)}
+        if (not datos['vendedor_agente'] and not datos['vendedor_freelance']
+                and len(agentes) == 1 and '/' not in vendedor_original
+                and not any(normalizar_texto(v) == 'FREELANCER' for v in contextos)):
+            datos['vendedor_agente'] = next(iter(agentes.values()))
         tarifas = {a for v in contextos + [datos['vendedor_agente']]
                    if (a := normalizar_agente(v))}
+        tarifas.update(agentes)
         datos['canal'] = next(iter(tarifas)) if len(tarifas) == 1 else ''
-        datos['es_jornada'] = True if any(normalizar_texto(v) in {'JORNADA', 'JORNADA BANCO DEL TESORO'}
-                                           for v in contextos) else None
+        contexto_jornada = _texto(fila.get(canales[1])) if canales[1] else ''
+        datos['es_jornada'] = identificar_jornada(datos['banco'], contexto_jornada)
         # Un rol FREELANCER explícito permite usar su vendedor; un nombre libre no.
         datos['es_freelance'] = any(normalizar_texto(v) == 'FREELANCER' for v in contextos)
         if not datos['vendedor_freelance'] and datos['es_freelance']:
             datos['vendedor_freelance'] = _beneficiario(fila.get(vendedor)) if vendedor else ''
+        error_vendedor = ''
+        if '/' in vendedor_original:
+            try:
+                persona, banco_persona = separar_vendedor_banco(vendedor_original)
+                if (datos['vendedor_freelance'] and normalizar_texto(datos['vendedor_freelance']) not in
+                        {persona, normalizar_texto(vendedor_original)}
+                        or datos['vendedor_banco'] and _banco(datos['vendedor_banco']) != banco_persona):
+                    raise ValueError('Beneficiarios contradictorios con VENDEDOR; requiere revisión.')
+                datos['vendedor_freelance'], datos['vendedor_banco'] = persona, banco_persona
+            except ValueError as error:
+                error_vendedor = str(error)
         r = calcular_comision(**datos, precios=precios)
         avisos = [r['advertencia']] if r['advertencia'] else []
+        if error_vendedor:
+            avisos.append(error_vendedor)
+            r.update(monto_total=None, monto_agente=None, monto_banco=None, monto_freelance=None)
+        if re.search(r'\bJORNADA\b', normalizar_texto(contexto_jornada)) and datos['es_jornada'] is not True:
+            avisos.append('Jornada/banco sin identificación inequívoca; requiere revisión.')
         if len(tarifas) > 1:
             avisos.append('Canales/agente con equivalencias diferentes; confirmar tarifa.')
         vacios = all(_texto(fila[destinos[k]]) == '' for k in montos)
-        es_nueva = fila.get('__ORIGEN') == 'VENTAS_NUEVAS'
-        if es_nueva and vacios and not avisos:
+        if vacios and not avisos:
             for k, c in destinos.items():
                 resultado.at[idx, c] = r[k]
             diferencia = r['diferencia']
