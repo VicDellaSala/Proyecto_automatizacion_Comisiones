@@ -243,3 +243,90 @@ class AplicacionMotorTests(unittest.TestCase):
         self.assertEqual(final.loc[0, 'MONTO TOTAL A PAGAR $'], 20)
         repetido = self.aplicar(final)
         pd.testing.assert_frame_equal(final, repetido)
+
+    def test_fallback_canal_no_depende_de_otras_columnas(self):
+        casos = [('REGION CENTRO', 'AL CONTADO', 'Castle', 25),
+                 ('REGION OCCIDENTE', 'AL CONTADO', 'Castle', 25),
+                 ('REGION ORIENTE', 'AL CONTADO', 'Castle', 25),
+                 ('CENTRO TIPO II', 'AL CONTADO', 'Castle', 50),
+                 ('GRANPRO', 'AL CONTADO', 'Castle', 38.4),
+                 ('VIRTUALNET', 'AL CONTADO', 'Zappy', 36),
+                 ('VENEPOS', 'AL CONTADO', 'Castle', 38.4),
+                 ('CANAL FICTICIO', 'COMODATO', 'Castle', 20)]
+        for canal, modo, equipo, total in casos:
+            with self.subTest(canal=canal):
+                base = self.base()
+                base['CANAL'], base['ESTATUS CXC'], base['EQUIPO'] = canal, modo, equipo
+                base['VENDEDOR AGENTE AUTORIZADO'] = ''
+                base['VENDEDOR'] = 'MULTITIENDA'
+                base['CANAL DE VENTA (JORNADA QUE PERTENECE)'] = 'REGION ORIENTE'
+                r = self.aplicar(base).iloc[0]
+                self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], canal)
+                self.assertEqual(r['MONTO COMISION AGENTE AUTORIZADO $'], total)
+                self.assertEqual(r['MONTO TOTAL A PAGAR $'], total)
+                self.assertEqual(r['__DIFERENCIA_CUADRE_COMISION'], 0)
+
+    def test_credicardpos_exacto_persona_y_bancaribe(self):
+        for vendedor, total, banco in [('Persona Ficticia', 10, None),
+                                      (' Persona Ficticia / bancaribe ', 20, 10)]:
+            base = self.base()
+            base['CANAL'] = ' credicardpos '
+            base['VENDEDOR'] = vendedor
+            base['VENDEDOR AGENTE AUTORIZADO'] = 'CREDICARDPOS'
+            r = self.aplicar(base).iloc[0]
+            self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], '')
+            self.assertEqual(r['MONTO COMISION VENDEDOR/FREELANCE $'], 10)
+            self.assertEqual(r['MONTO COMISION BANCO $'], banco)
+            self.assertEqual(r['MONTO TOTAL A PAGAR $'], total)
+            self.assertEqual(r['__DIFERENCIA_CUADRE_COMISION'], 0)
+            self.assertEqual(r['VENDEDOR / FREELANCE'].upper(), 'PERSONA FICTICIA')
+
+    def test_credicardpos_en_otras_columnas_no_es_freelance(self):
+        base = self.base()
+        base['CANAL'] = 'REGION CENTRO'
+        base['VENDEDOR'] = 'CREDICARDPOS'
+        base['CANAL DE VENTA (JORNADA QUE PERTENECE)'] = 'CREDICARDPOS'
+        base['VENDEDOR AGENTE AUTORIZADO'] = ''
+        r = self.aplicar(base).iloc[0]
+        self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], 'REGION CENTRO')
+        self.assertFalse(r['VENDEDOR / FREELANCE'])
+        self.assertEqual(r['MONTO TOTAL A PAGAR $'], 20)
+
+    def test_credicardpos_banco_desconocido_no_inventa(self):
+        base = self.base()
+        base['CANAL'], base['VENDEDOR'] = 'CREDICARDPOS', 'Persona Ficticia / Otra Persona'
+        base['VENDEDOR AGENTE AUTORIZADO'] = ''
+        r = self.aplicar(base).iloc[0]
+        self.assertTrue(r['__REQUIERE_REVISION'])
+        self.assertTrue(pd.isna(r['MONTO TOTAL A PAGAR $']))
+
+    def test_jornada_tiene_precedencia_sobre_credicardpos(self):
+        base = self.base()
+        base['CANAL'] = 'CREDICARDPOS'
+        base['BANCO'] = 'TESORO'
+        base['CANAL DE VENTA (JORNADA QUE PERTENECE)'] = 'JORNADA BANCO TESORO'
+        base['VENDEDOR'] = 'Persona Ficticia'
+        r = self.aplicar(base).iloc[0]
+        self.assertEqual(r['MONTO COMISION BANCO $'], 10)
+        self.assertEqual(r['MONTO COMISION AGENTE AUTORIZADO $'], 10)
+        self.assertEqual(r['MONTO TOTAL A PAGAR $'], 20)
+        self.assertFalse(r['VENDEDOR / FREELANCE'])
+
+    def test_canal_alias_con_credicardpos_no_es_freelancer(self):
+        base = self.base()
+        base['CANAL'] = 'CREDICARDPOSGRANPRO'
+        base['ESTATUS CXC'] = 'AL CONTADO'
+        base['VENDEDOR AGENTE AUTORIZADO'] = ''
+        r = self.aplicar(base).iloc[0]
+        self.assertEqual(r['MONTO TOTAL A PAGAR $'], 38.4)
+        self.assertFalse(r['VENDEDOR / FREELANCE'])
+
+    def test_credicardpos_sin_persona_no_inventa_nombre(self):
+        for vendedor in ['', 'FREELANCE', 'BANCARIBE']:
+            base = self.base()
+            base['CANAL'], base['VENDEDOR'] = 'CREDICARDPOS', vendedor
+            base['VENDEDOR AGENTE AUTORIZADO'] = ''
+            r = self.aplicar(base).iloc[0]
+            self.assertTrue(r['__REQUIERE_REVISION'])
+            self.assertTrue(pd.isna(r['MONTO TOTAL A PAGAR $']))
+            self.assertEqual(r['__TOTAL_COMISION_CALCULADO'], 10)

@@ -370,8 +370,26 @@ def aplicar_motor_comisiones(df, precios=None):
         datos['es_jornada'] = identificar_jornada(datos['banco'], contexto_jornada)
         # Un rol FREELANCER explícito permite usar su vendedor; un nombre libre no.
         datos['es_freelance'] = any(normalizar_texto(v) == 'FREELANCER' for v in contextos)
+        if datos['es_jornada'] is not True:
+            canal_normal = _beneficiario(fila.get(canales[0])) if canales[0] else ''
+            credicardpos = normalizar_texto(canal_normal) == 'CREDICARDPOS'
+            datos['es_freelance'] = datos['es_freelance'] or credicardpos
+            # CANAL define el beneficiario normal; VENDEDOR y la columna de
+            # Jornada no compiten con él ni aportan una tarifa alternativa.
+            datos['vendedor_agente'] = _beneficiario(fila[destinos['vendedor_agente']])
+            if credicardpos and normalizar_texto(datos['vendedor_agente']) == 'CREDICARDPOS':
+                datos['vendedor_agente'] = ''
+            if not (datos['es_freelance'] or datos['vendedor_freelance'] or
+                    datos['vendedor_banco'] or '/' in vendedor_original):
+                datos['vendedor_agente'] = canal_normal or datos['vendedor_agente']
+            datos['canal'] = canal_normal
+            tarifas = set()
         if not datos['vendedor_freelance'] and datos['es_freelance']:
             datos['vendedor_freelance'] = _beneficiario(fila.get(vendedor)) if vendedor else ''
+            if (datos['es_jornada'] is not True and credicardpos
+                    and (_banco(datos['vendedor_freelance']) or normalizar_texto(datos['vendedor_freelance'])
+                         in {'FREELANCE', 'FREELANCER', 'CREDICARDPOS'})):
+                datos['vendedor_freelance'] = ''  # Banco/rol no identifica una persona.
         error_vendedor = ''
         if '/' in vendedor_original:
             try:

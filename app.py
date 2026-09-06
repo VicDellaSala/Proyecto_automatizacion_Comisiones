@@ -10,7 +10,7 @@ from procesamiento import (
 from reglas_comisiones import PRECIOS_BASE
 
 
-VERSION_APP = "4.1-MODALIDAD-CXC"
+VERSION_APP = "4.2-FALLBACK-CANAL"
 
 
 st.set_page_config(

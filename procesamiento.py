@@ -16,7 +16,7 @@ import pandas as pd
 
 from reglas_comisiones import estandarizar_equipo, aplicar_motor_comisiones
 
-VERSION_PROCESAMIENTO = "4.1-MODALIDAD-CXC"
+VERSION_PROCESAMIENTO = "4.2-FALLBACK-CANAL"
 
 
 HOJA_COMISIONES = "VENTAS"

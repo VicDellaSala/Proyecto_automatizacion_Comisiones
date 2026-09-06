@@ -68,8 +68,11 @@ ambos roles; otros bancos o más componentes requieren revisión. OFICINA/Tesoro
 no aplica reparto de Jornada. Jornada exige coincidencia de BANCO y canal.
 
 Las filas sin importes se completan únicamente cuando no hay dudas.
-ESTATUS CXC define la modalidad. CANAL/VENDEDOR solo identifican agentes mediante
-equivalencias confirmadas; un beneficiario desconocido conserva el cálculo interno
+ESTATUS CXC define la modalidad. Las ventas normales usan CANAL como beneficiario
+y fuente de tarifa, sin fallback a VENDEDOR ni a la columna de Jornada.
+CANAL exactamente CREDICARDPOS usa VENDEDOR como Freelancer (10), o Persona/Bancaribe
+(10 + 10), después de la detección de Jornada BT. Bancos o roles sin persona
+identificada requieren revisión. Un beneficiario desconocido conserva el cálculo interno
 y requiere revisión. Los importes ya presentes, incluidos ceros y repartos parciales,
 se conservan y se comparan con la regla; no se corrige el total silenciosamente.
 La interfaz muestra la regla, los montos pendientes y los descuadres. El motor
