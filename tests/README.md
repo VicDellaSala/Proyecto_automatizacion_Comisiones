@@ -62,16 +62,17 @@ El resultado incluye beneficiarios, componentes, total, regla aplicada,
 advertencia, requiere_revision, diferencia y monto_pendiente_asignacion.
 El cuadre usa aritmética decimal: diferencia = componentes menos total.
 No se extrapolan bancos o agentes desconocidos ni se inventan beneficiarios.
-Un rol FREELANCER explícito puede tomar el nombre de VENDEDOR; un nombre libre
-sin rol no autoriza esa inferencia. Persona/Bancaribe en VENDEDOR identifica
-ambos roles; otros bancos o más componentes requieren revisión. OFICINA/Tesoro
+CANAL DE VENTA=FREELANCER no clasifica la venta. BANCO=BANCARIBE con dos componentes
+en VENDEDOR asigna 10 + 10 y conserva el texto completo, incluidos ambos nombres.
+Bancaribe sin barra sigue como agente normal; no activa Freelancer. OFICINA/Tesoro
 no aplica reparto de Jornada. Jornada exige coincidencia de BANCO y canal.
 
 Las filas sin importes se completan únicamente cuando no hay dudas.
 ESTATUS CXC define la modalidad. Las ventas normales usan CANAL como beneficiario
 y fuente de tarifa, sin fallback a VENDEDOR ni a la columna de Jornada.
 CANAL exactamente CREDICARDPOS usa VENDEDOR como Freelancer (10), o Persona/Bancaribe
-(10 + 10), después de la detección de Jornada BT. Bancos o roles sin persona
+(10 + 10), después de la detección de Jornada BT y sujeto a la excepción Bancaribe
+sin barra. CREDICARDPOS nunca se asigna como agente. Bancos o roles sin persona
 identificada requieren revisión. Un beneficiario desconocido conserva el cálculo interno
 y requiere revisión. Los importes ya presentes, incluidos ceros y repartos parciales,
 se conservan y se comparan con la regla; no se corrige el total silenciosamente.

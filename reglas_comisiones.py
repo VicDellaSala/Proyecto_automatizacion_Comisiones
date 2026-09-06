@@ -220,7 +220,7 @@ def identificar_jornada(banco, canal):
 
 def calcular_comision(*, equipo, modalidad, fecha, canal='', banco='', es_jornada=None,
                        vendedor_banco='', vendedor_freelance='', vendedor_agente='', precios=None,
-                       es_freelance=False):
+                       es_freelance=False, conservar_vendedor_completo=False):
     """Devuelve componentes, regla y revisión sin depender de TX/Access/ESTATUS.
 
     Los beneficiarios proceden de roles explícitos; no se infiere una persona
@@ -238,7 +238,14 @@ def calcular_comision(*, equipo, modalidad, fecha, canal='', banco='', es_jornad
             raise ValueError('Modalidad sin regla confirmada.')
         if modo == 'COMODATO' and _fecha_tarifa(fecha) is None:
             raise ValueError('FECHA de la venta vacía o inválida; no se asigna tarifa.')
-        if '/' in r['vendedor_freelance']:
+        if conservar_vendedor_completo:
+            r['vendedor_freelance'] = str(vendedor_freelance)
+            partes = r['vendedor_freelance'].split('/')
+            if (_banco(banco) != 'BANCARIBE' or len(partes) != 2
+                    or not all(_beneficiario(p) for p in partes)):
+                raise ValueError('Bancaribe: se necesitan dos componentes de VENDEDOR válidos.')
+            r['vendedor_banco'] = 'BANCARIBE'
+        elif '/' in r['vendedor_freelance']:
             persona, banco_persona = separar_vendedor_banco(r['vendedor_freelance'])
             if r['vendedor_banco'] and _banco(r['vendedor_banco']) != 'BANCARIBE':
                 raise ValueError('Bancos contradictorios en el reparto de freelance.')
@@ -373,15 +380,22 @@ def aplicar_motor_comisiones(df, precios=None):
         if datos['es_jornada'] is not True:
             canal_normal = _beneficiario(fila.get(canales[0])) if canales[0] else ''
             credicardpos = normalizar_texto(canal_normal) == 'CREDICARDPOS'
-            datos['es_freelance'] = datos['es_freelance'] or credicardpos
+            es_bancaribe = _banco(datos['banco']) == 'BANCARIBE'
+            bancaribe_compartido = es_bancaribe and '/' in vendedor_original
+            datos['es_freelance'] = bancaribe_compartido or (credicardpos and not es_bancaribe)
             # CANAL define el beneficiario normal; VENDEDOR y la columna de
             # Jornada no compiten con él ni aportan una tarifa alternativa.
-            datos['vendedor_agente'] = _beneficiario(fila[destinos['vendedor_agente']])
-            if credicardpos and normalizar_texto(datos['vendedor_agente']) == 'CREDICARDPOS':
-                datos['vendedor_agente'] = ''
-            if not (datos['es_freelance'] or datos['vendedor_freelance'] or
-                    datos['vendedor_banco'] or '/' in vendedor_original):
-                datos['vendedor_agente'] = canal_normal or datos['vendedor_agente']
+            # Las columnas de salida no clasifican la venta: pueden contener
+            # un reparto anterior que ahora deba auditarse.
+            datos['vendedor_freelance'] = ''
+            datos['vendedor_banco'] = ''
+            datos['vendedor_agente'] = '' if datos['es_freelance'] or credicardpos else canal_normal
+            if not canal_normal and not datos['es_freelance']:
+                datos['vendedor_agente'] = _beneficiario(fila[destinos['vendedor_agente']])
+            if bancaribe_compartido:
+                datos['vendedor_freelance'] = str(fila[vendedor])
+                datos['vendedor_banco'] = 'BANCARIBE'
+                datos['conservar_vendedor_completo'] = True
             datos['canal'] = canal_normal
             tarifas = set()
         if not datos['vendedor_freelance'] and datos['es_freelance']:
@@ -391,7 +405,8 @@ def aplicar_motor_comisiones(df, precios=None):
                          in {'FREELANCE', 'FREELANCER', 'CREDICARDPOS'})):
                 datos['vendedor_freelance'] = ''  # Banco/rol no identifica una persona.
         error_vendedor = ''
-        if '/' in vendedor_original:
+        if ('/' in vendedor_original and not datos.get('conservar_vendedor_completo')
+                and (datos['es_jornada'] is True or datos['es_freelance'])):
             try:
                 persona, banco_persona = separar_vendedor_banco(vendedor_original)
                 if (datos['vendedor_freelance'] and normalizar_texto(datos['vendedor_freelance']) not in

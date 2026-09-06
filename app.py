@@ -10,7 +10,7 @@ from procesamiento import (
 from reglas_comisiones import PRECIOS_BASE
 
 
-VERSION_APP = "4.2-FALLBACK-CANAL"
+VERSION_APP = "4.3-DETECCION-BANCARIBE"
 
 
 st.set_page_config(

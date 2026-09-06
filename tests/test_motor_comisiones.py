@@ -198,6 +198,7 @@ class AplicacionMotorTests(unittest.TestCase):
         for vendedor, valido in [(' Persona Ficticia / bancaribe ', True),
                                  ('Persona / Otro Banco', False), ('Persona / Bancaribe / Otro', False)]:
             base = self.base()
+            base['CANAL'] = 'CREDICARDPOS'
             base['VENDEDOR AGENTE AUTORIZADO'] = ''
             base['VENDEDOR'] = vendedor
             r = self.aplicar(base).iloc[0]
@@ -330,3 +331,70 @@ class AplicacionMotorTests(unittest.TestCase):
             self.assertTrue(r['__REQUIERE_REVISION'])
             self.assertTrue(pd.isna(r['MONTO TOTAL A PAGAR $']))
             self.assertEqual(r['__TOTAL_COMISION_CALCULADO'], 10)
+
+    def test_canal_venta_freelancer_no_clasifica(self):
+        for canal, total in [('VENEPOS', 38.4), ('REGION OCCIDENTE', 25), ('REGION CENTRO', 25)]:
+            base = self.base()
+            base['CANAL'], base['ESTATUS CXC'] = canal, 'AL CONTADO'
+            base['CANAL DE VENTA (JORNADA QUE PERTENECE)'] = 'FREELANCER'
+            base['VENDEDOR'] = 'Persona Ficticia'
+            base['VENDEDOR AGENTE AUTORIZADO'] = ''
+            r = self.aplicar(base).iloc[0]
+            self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], canal)
+            self.assertEqual(r['MONTO TOTAL A PAGAR $'], total)
+            self.assertFalse(r['VENDEDOR / FREELANCE'])
+            self.assertEqual(r['__DIFERENCIA_CUADRE_COMISION'], 0)
+
+    def test_bancaribe_dos_personas_conserva_texto_completo(self):
+        for canal in ['CREDICARDPOS', 'VENEPOS', 'REGION CENTRO']:
+            base = self.base()
+            base['CANAL'], base['BANCO'] = canal, ' bancaribe '
+            base['VENDEDOR'] = ' Persona Ficticia A / Persona Ficticia B '
+            base['VENDEDOR AGENTE AUTORIZADO'] = ''
+            r = self.aplicar(base)
+            self.assertEqual(r.loc[0, 'VENDEDOR / FREELANCE'], base.loc[0, 'VENDEDOR'])
+            self.assertEqual(r.loc[0, 'VENDEDOR BANCO'], 'BANCARIBE')
+            self.assertEqual(r.loc[0, 'MONTO COMISION BANCO $'], 10)
+            self.assertEqual(r.loc[0, 'MONTO COMISION VENDEDOR/FREELANCE $'], 10)
+            self.assertEqual(r.loc[0, 'MONTO TOTAL A PAGAR $'], 20)
+            self.assertEqual(r.loc[0, '__DIFERENCIA_CUADRE_COMISION'], 0)
+            pd.testing.assert_frame_equal(r, self.aplicar(r))
+
+    def test_bancaribe_nombre_unico_es_agente(self):
+        base = self.base()
+        base['CANAL'], base['BANCO'] = 'VENEPOS', 'BANCARIBE'
+        base['VENDEDOR'] = 'Persona Ficticia'
+        base['CANAL DE VENTA (JORNADA QUE PERTENECE)'] = 'FREELANCER'
+        base['VENDEDOR AGENTE AUTORIZADO'] = ''
+        r = self.aplicar(base).iloc[0]
+        self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], 'VENEPOS')
+        self.assertEqual(r['MONTO TOTAL A PAGAR $'], 20)
+        self.assertFalse(r['VENDEDOR / FREELANCE'])
+        self.assertFalse(r['VENDEDOR BANCO'])
+
+    def test_barra_sin_bancaribe_ni_canal_credicardpos_es_normal(self):
+        base = self.base()
+        base['CANAL'], base['BANCO'] = 'REGION CENTRO', 'OTRO BANCO'
+        base['VENDEDOR'] = 'Persona Ficticia A / Persona Ficticia B'
+        base['VENDEDOR AGENTE AUTORIZADO'] = ''
+        r = self.aplicar(base).iloc[0]
+        self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], 'REGION CENTRO')
+        self.assertEqual(r['MONTO TOTAL A PAGAR $'], 20)
+        self.assertFalse(r['VENDEDOR / FREELANCE'])
+
+    def test_bancaribe_barra_incompleta_requiere_revision(self):
+        for vendedor in ['Persona /', '/ Persona', 'Persona / Persona / Persona']:
+            base = self.base()
+            base['BANCO'], base['VENDEDOR'] = 'BANCARIBE', vendedor
+            r = self.aplicar(base).iloc[0]
+            self.assertTrue(r['__REQUIERE_REVISION'])
+            self.assertTrue(pd.isna(r['MONTO TOTAL A PAGAR $']))
+
+    def test_bancaribe_unico_credicardpos_no_inventa_agente(self):
+        base = self.base()
+        base['CANAL'], base['BANCO'] = 'CREDICARDPOS', 'BANCARIBE'
+        base['VENDEDOR'], base['VENDEDOR AGENTE AUTORIZADO'] = 'Persona Ficticia', ''
+        r = self.aplicar(base).iloc[0]
+        self.assertFalse(r['VENDEDOR / FREELANCE'])
+        self.assertNotEqual(r['VENDEDOR AGENTE AUTORIZADO'], 'CREDICARDPOS')
+        self.assertTrue(r['__REQUIERE_REVISION'])
