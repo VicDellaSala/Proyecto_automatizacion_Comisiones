@@ -52,7 +52,27 @@ unifican, manteniendo separados N/A, N/D, SIN TX y C/P SIN TX. Se conserva el te
 de etiquetas desconocidas. La columna se resuelve mediante encabezados exactos
 para que su ausencia nunca provoque escribir etiquetas TX en ESTATUS.
 
-Fuera de alcance: mapeo temporal TX y nuevas reglas de distribución de pagos.
+El motor de distribución está centralizado en reglas_comisiones.py. Las pruebas
+cubren Comodato por FECHA, los cortes inclusivos, Al Contado, precios editables,
+equivalencias explícitas del 16%, Tesoro/Jornada y Freelancer/Bancaribe.
+La modalidad determina la tarifa de Al Contado antes de repartir banco/resto;
+la excepción Zappy/Jornada de total 25 se limita a Comodato.
+
+El resultado incluye beneficiarios, componentes, total, regla aplicada,
+advertencia, requiere_revision, diferencia y monto_pendiente_asignacion.
+El cuadre usa aritmética decimal: diferencia = componentes menos total.
+No se extrapolan bancos o agentes desconocidos ni se inventan beneficiarios.
+Un rol FREELANCER explícito puede tomar el nombre de VENDEDOR; un nombre libre
+sin rol no autoriza esa inferencia. OFICINA/Tesoro sigue requiriendo aclaración
+si no hay evidencia explícita de jornada.
+
+Las ventas nuevas sin importes se completan únicamente cuando no hay dudas.
+Los importes ya presentes, incluidos ceros e históricos vacíos/incompletos,
+se conservan y se comparan con la regla; no se corrige el total silenciosamente.
+La interfaz muestra la regla, los montos pendientes y los descuadres. El motor
+no escribe ESTATUS, TX, Access, observaciones ni fechas de pago.
+
+Fuera de alcance: mapeo temporal TX y reglas de distribución no confirmadas.
 
 Los sufijos TX mensuales se conservan como parte del encabezado; no se equipara
 la columna con _1 a la columna sin sufijo. No se asignan meses hasta confirmar

@@ -14,9 +14,9 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from reglas_comisiones import estandarizar_equipo
+from reglas_comisiones import estandarizar_equipo, aplicar_motor_comisiones
 
-VERSION_PROCESAMIENTO = "3.9-OBSERVACION-TX"
+VERSION_PROCESAMIENTO = "4.0-MOTOR-COMISIONES"
 
 
 HOJA_COMISIONES = "VENTAS"
@@ -2093,6 +2093,7 @@ def recalcular_comisiones(
     r34,
     afiliados_access,
     mes_r34=None,
+    precios=None,
 ):
     resultado = df.copy()
 
@@ -2496,7 +2497,7 @@ def recalcular_comisiones(
     resultado["__OBSERVACION_EN_VALIDACION"] = resultado.index.isin(filas_observacion)
     actualizar_observaciones(resultado, lookup, filas_observacion)
 
-    return resultado
+    return aplicar_motor_comisiones(resultado, precios=precios)
 
 
 def determinar_mes_r34(
@@ -2519,6 +2520,7 @@ def procesar_todo(
     archivo_comisiones,
     archivo_access,
     chunksize=100_000,
+    precios=None,
 ):
     archivo_comisiones.seek(0)
 
@@ -2577,6 +2579,7 @@ def procesar_todo(
         r34,
         afiliados_access,
         mes_r34=mes_r34,
+        precios=precios,
     )
 
     return {

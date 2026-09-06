@@ -10,7 +10,7 @@ from procesamiento import (
 from reglas_comisiones import PRECIOS_BASE
 
 
-VERSION_APP = "3.3-OBSERVACION-TX"
+VERSION_APP = "4.0-MOTOR-COMISIONES"
 
 
 st.set_page_config(
@@ -382,6 +382,7 @@ else:
 
                     chunksize=
                         100_000,
+                    precios=st.session_state["precios"],
                 )
 
             faltantes = (
@@ -531,6 +532,23 @@ if "resultados" in st.session_state:
         "El contador verifica el archivo cargado por afiliado; excluye Pinpagos. "
         "Los valores históricos de filas no pendientes se conservan en el libro."
     )
+
+    if "__REGLA_COMISION" in final.columns:
+        with st.expander("Cálculo y cuadre de comisiones"):
+            detalle_comisiones = final[[
+                "__ROW_ID", "__REGLA_COMISION", "__TOTAL_COMISION_CALCULADO",
+                "__MONTO_PENDIENTE_ASIGNACION", "__DIFERENCIA_CUADRE_COMISION",
+                "__ADVERTENCIA_COMISION",
+            ]].rename(columns={
+                "__ROW_ID": "ID interno", "__REGLA_COMISION": "Regla aplicada",
+                "__TOTAL_COMISION_CALCULADO": "Total según regla (USD)",
+                "__MONTO_PENDIENTE_ASIGNACION": "Pendiente de beneficiario (USD)",
+                "__DIFERENCIA_CUADRE_COMISION": "Componentes menos total (USD)",
+                "__ADVERTENCIA_COMISION": "Revisión de comisión",
+            })
+            st.dataframe(detalle_comisiones.astype("string").fillna(""), hide_index=True, use_container_width=True)
+            st.caption("Los importes históricos se conservan. Las diferencias requieren revisión; "
+                       "las ventas nuevas se completan cuando la regla y los beneficiarios están definidos.")
 
     if duplicadas:
         st.info(
@@ -826,6 +844,7 @@ if "resultados" in st.session_state:
                     resultados[
                         "mes_r34"
                     ],
+                precios=st.session_state["precios"],
             )
 
             resultados[
