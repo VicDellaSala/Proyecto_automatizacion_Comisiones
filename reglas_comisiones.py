@@ -112,12 +112,13 @@ def normalizar_agente(valor):
     texto = normalizar_texto(_texto(valor))
     aliases = {'CREDICARDPOSGRANPRO': 'GRANPRO', 'INVERSIONES TPOS': 'INV TPOS',
                'OCCIDENTE': 'REGION OCCIDENTE', 'ORIENTE': 'REGION ORIENTE',
-               'CENTRO': 'REGION CENTRO'}
+               'CENTRO': 'REGION CENTRO', 'POSMGTA25': 'POSMGTA',
+               'POSMGTA25 CA': 'POSMGTA'}
     if texto in aliases:
         return aliases[texto]
     if texto in AGENTES_16 or texto in TARIFAS_CONTADO:
         return texto
-    for agente in ('POSMGTA', 'POSMARACAY'):
+    for agente in ('POSMARACAY',):
         if re.fullmatch(agente + r'\s*\d+(?:\s+C\.?A\.?)?', texto):
             return agente
     return None
@@ -243,7 +244,12 @@ def calcular_comision(*, equipo, modalidad, fecha, canal='', banco='', es_jornad
             raise ValueError('Modalidad sin regla confirmada.')
         if modo == 'COMODATO' and _fecha_tarifa(fecha) is None:
             raise ValueError('FECHA de la venta vacía o inválida; no se asigna tarifa.')
-        if conservar_vendedor_completo:
+        freelance_sin_reparto = (es_freelance and normalizar_canal(canal) == 'CREDICARDPOS'
+                                 and es_jornada is not True and not conservar_vendedor_completo)
+        if freelance_sin_reparto:
+            r['vendedor_freelance'] = str(vendedor_freelance) if _beneficiario(vendedor_freelance) else ''
+            r['vendedor_banco'] = ''
+        elif conservar_vendedor_completo:
             r['vendedor_freelance'] = str(vendedor_freelance)
             partes = r['vendedor_freelance'].split('/')
             if (_banco(banco) != 'BANCARIBE' or len(partes) != 2
@@ -395,7 +401,7 @@ def aplicar_motor_comisiones(df, precios=None):
             credicardpos = normalizar_texto(canal_normal) == 'CREDICARDPOS'
             es_bancaribe = _banco(datos['banco']) == 'BANCARIBE'
             bancaribe_compartido = es_bancaribe and '/' in vendedor_original
-            datos['es_freelance'] = bancaribe_compartido or (credicardpos and not es_bancaribe)
+            datos['es_freelance'] = bancaribe_compartido or credicardpos
             # CANAL define el beneficiario normal; VENDEDOR y la columna de
             # Jornada no compiten con él ni aportan una tarifa alternativa.
             # Las columnas de salida no clasifican la venta: pueden contener
@@ -412,13 +418,14 @@ def aplicar_motor_comisiones(df, precios=None):
             datos['canal'] = canal_normal
             tarifas = set()
         if not datos['vendedor_freelance'] and datos['es_freelance']:
-            datos['vendedor_freelance'] = _beneficiario(fila.get(vendedor)) if vendedor else ''
+            datos['vendedor_freelance'] = str(fila[vendedor]) if vendedor and _beneficiario(fila.get(vendedor)) else ''
             if (datos['es_jornada'] is not True and credicardpos
                     and (_banco(datos['vendedor_freelance']) or normalizar_texto(datos['vendedor_freelance'])
                          in {'FREELANCE', 'FREELANCER', 'CREDICARDPOS'})):
                 datos['vendedor_freelance'] = ''  # Banco/rol no identifica una persona.
         error_vendedor = ''
         if ('/' in vendedor_original and not datos.get('conservar_vendedor_completo')
+                and not (datos['es_jornada'] is not True and credicardpos)
                 and (datos['es_jornada'] is True or datos['es_freelance'])):
             try:
                 persona, banco_persona = separar_vendedor_banco(vendedor_original)

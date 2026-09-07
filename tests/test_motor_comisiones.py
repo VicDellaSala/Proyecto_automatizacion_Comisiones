@@ -34,10 +34,10 @@ class MotorComisionesTests(unittest.TestCase):
 
     def test_alias_explicitos_y_negativos(self):
         for valor, esperado in [('CREDICARDPOSGRANPRO', 'GRANPRO'), ('INVERSIONES TPOS', 'INV TPOS'),
-                                ('Posmgta26 CA', 'POSMGTA'), ('POSMGTA 123', 'POSMGTA'),
+                                ('POSMGTA25 CA', 'POSMGTA'), ('POSMGTA25', 'POSMGTA'),
                                 ('PosMaracay26', 'POSMARACAY'), (' región centro ', 'REGION CENTRO')]:
             self.assertEqual(normalizar_agente(valor), esperado)
-        for valor in ['OTRO GRANPRO', 'GRANPRO AJENO', 'POSMGTA123OTRO', 'MULTITIENDA NUEVA', '']:
+        for valor in ['POSMGTA26 CA', 'POSMGTA 123', 'OTRO GRANPRO', 'GRANPRO AJENO', 'POSMGTA123OTRO', 'MULTITIENDA NUEVA', '']:
             self.assertIsNone(normalizar_agente(valor))
 
     def test_contado_tarifas_y_precios_editables(self):
@@ -231,22 +231,22 @@ class AplicacionMotorTests(unittest.TestCase):
                 self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], normalizar_agente(agente))
                 self.assertEqual(r['__DIFERENCIA_CUADRE_COMISION'], 0)
 
-    def test_vendedor_barra_desde_columna_original(self):
-        for vendedor, valido in [(' Persona Ficticia / bancaribe ', True),
-                                 ('Persona / Otro Banco', False), ('Persona / Bancaribe / Otro', False)]:
-            base = self.base()
-            base['CANAL'] = 'CREDICARDPOS'
-            base['VENDEDOR AGENTE AUTORIZADO'] = ''
-            base['VENDEDOR'] = vendedor
-            r = self.aplicar(base).iloc[0]
-            if valido:
-                self.assertEqual(r['MONTO TOTAL A PAGAR $'], 20)
-                self.assertEqual(r['MONTO COMISION BANCO $'], 10)
+    def test_credicardpos_solo_banco_explicito_activa_reparto(self):
+        for banco in ['OTRO BANCO', '', 'BANCARIBE']:
+            for vendedor in ['Persona Ficticia', ' Persona A / Persona B ', 'Persona / Bancaribe']:
+                base = self.base()
+                base['CANAL'], base['BANCO'] = 'CREDICARDPOS', banco
+                base['VENDEDOR AGENTE AUTORIZADO'] = ''
+                base['VENDEDOR'] = vendedor
+                r = self.aplicar(base).iloc[0]
+                compartido = banco == 'BANCARIBE' and '/' in vendedor
+                self.assertEqual(r['MONTO TOTAL A PAGAR $'], 20 if compartido else 10)
                 self.assertEqual(r['MONTO COMISION VENDEDOR/FREELANCE $'], 10)
-                self.assertEqual(r['VENDEDOR / FREELANCE'], 'PERSONA FICTICIA')
-            else:
-                self.assertTrue(r['__REQUIERE_REVISION'])
-                self.assertTrue(pd.isna(r['MONTO TOTAL A PAGAR $']))
+                self.assertEqual(r['VENDEDOR / FREELANCE'], vendedor)
+                self.assertEqual(r['VENDEDOR BANCO'], 'BANCARIBE' if compartido else '')
+                self.assertEqual(r['MONTO COMISION BANCO $'], 10 if compartido else None)
+                self.assertFalse(r['VENDEDOR AGENTE AUTORIZADO'])
+                self.assertFalse(r['__REQUIERE_REVISION'])
 
     def test_jornada_requiere_banco_y_canal(self):
         for canal, banco, esperado in [('Jornada Banco Tesoro', 'Tesoro', 10),
@@ -306,7 +306,7 @@ class AplicacionMotorTests(unittest.TestCase):
 
     def test_credicardpos_exacto_persona_y_bancaribe(self):
         for vendedor, total, banco in [('Persona Ficticia', 10, None),
-                                      (' Persona Ficticia / bancaribe ', 20, 10)]:
+                                      (' Persona Ficticia / bancaribe ', 10, None)]:
             base = self.base()
             base['CANAL'] = ' credicardpos '
             base['VENDEDOR'] = vendedor
@@ -317,7 +317,7 @@ class AplicacionMotorTests(unittest.TestCase):
             self.assertEqual(r['MONTO COMISION BANCO $'], banco)
             self.assertEqual(r['MONTO TOTAL A PAGAR $'], total)
             self.assertEqual(r['__DIFERENCIA_CUADRE_COMISION'], 0)
-            self.assertEqual(r['VENDEDOR / FREELANCE'].upper(), 'PERSONA FICTICIA')
+            self.assertEqual(r['VENDEDOR / FREELANCE'], vendedor)
 
     def test_credicardpos_en_otras_columnas_no_es_freelance(self):
         base = self.base()
@@ -335,8 +335,9 @@ class AplicacionMotorTests(unittest.TestCase):
         base['CANAL'], base['VENDEDOR'] = 'CREDICARDPOS', 'Persona Ficticia / Otra Persona'
         base['VENDEDOR AGENTE AUTORIZADO'] = ''
         r = self.aplicar(base).iloc[0]
-        self.assertTrue(r['__REQUIERE_REVISION'])
-        self.assertTrue(pd.isna(r['MONTO TOTAL A PAGAR $']))
+        self.assertFalse(r['__REQUIERE_REVISION'])
+        self.assertFalse(r['VENDEDOR BANCO'])
+        self.assertEqual(r['MONTO TOTAL A PAGAR $'], 10)
 
     def test_jornada_tiene_precedencia_sobre_credicardpos(self):
         base = self.base()
@@ -427,11 +428,33 @@ class AplicacionMotorTests(unittest.TestCase):
             self.assertTrue(r['__REQUIERE_REVISION'])
             self.assertTrue(pd.isna(r['MONTO TOTAL A PAGAR $']))
 
-    def test_bancaribe_unico_credicardpos_no_inventa_agente(self):
+    def test_bancaribe_unico_credicardpos_freelancer_sin_banco(self):
         base = self.base()
         base['CANAL'], base['BANCO'] = 'CREDICARDPOS', 'BANCARIBE'
         base['VENDEDOR'], base['VENDEDOR AGENTE AUTORIZADO'] = 'Persona Ficticia', ''
         r = self.aplicar(base).iloc[0]
-        self.assertFalse(r['VENDEDOR / FREELANCE'])
+        self.assertEqual(r['VENDEDOR / FREELANCE'], 'Persona Ficticia')
         self.assertNotEqual(r['VENDEDOR AGENTE AUTORIZADO'], 'CREDICARDPOS')
-        self.assertTrue(r['__REQUIERE_REVISION'])
+        self.assertEqual(r['MONTO TOTAL A PAGAR $'], 10)
+        self.assertFalse(r['VENDEDOR BANCO'])
+        self.assertFalse(r['__REQUIERE_REVISION'])
+
+    def test_meses_juntos_con_na_no_borran_distribucion(self):
+        partes = []
+        for mes in (8, 9):
+            base = self.base()
+            base['FECHA'] = pd.Timestamp(2026, mes, 1)
+            base['CANAL'] = 'CREDICARDPOS'
+            base['VENDEDOR'] = ' Persona A / Persona B '
+            base['BANCO'] = 'BANCO FICTICIO'
+            base['VENDEDOR AGENTE AUTORIZADO'] = ''
+            base['CON TX'] = 'N/A'
+            partes.append(base)
+        junto = self.aplicar(pd.concat(partes, ignore_index=True))
+        for i, parte in enumerate(partes):
+            solo = self.aplicar(parte).iloc[0]
+            for c in ['VENDEDOR / FREELANCE', 'MONTO TOTAL A PAGAR $',
+                      'MONTO COMISION VENDEDOR/FREELANCE $', 'VENDEDOR BANCO']:
+                self.assertEqual(junto.iloc[i][c], solo[c])
+            self.assertEqual(junto.iloc[i]['MONTO TOTAL A PAGAR $'], 10)
+        pd.testing.assert_frame_equal(junto, self.aplicar(junto))

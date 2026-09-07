@@ -10,7 +10,7 @@ from reglas_comisiones import PRECIOS_BASE
 from revision_manual import preparar_descarga
 
 
-VERSION_APP = "5.3-TIPOS-Y-CANAL"
+VERSION_APP = "5.4-FREELANCER-Y-ALIAS"
 
 
 st.set_page_config(

@@ -61,7 +61,9 @@ class TiposCanalTests(unittest.TestCase):
         for valor,canon,total in [('OCCIDENTE','REGION OCCIDENTE',25),('REGION OCCIDENTE','REGION OCCIDENTE',25),
                 ('ORIENTE','REGION ORIENTE',25),('REGION ORIENTE','REGION ORIENTE',25),
                 ('CENTRO','REGION CENTRO',25),('REGION CENTRO','REGION CENTRO',25),
-                (' centro  tipo ii ','CENTRO TIPO II',50),('venepos','VENEPOS',38.4)]:
+                (' centro  tipo ii ','CENTRO TIPO II',50),('venepos','VENEPOS',38.4), ('POSMGTA','POSMGTA',38.4),
+                ('POSMGTA25','POSMGTA',38.4), ('POSMGTA25 CA','POSMGTA',38.4),
+                ('GRANPRO','GRANPRO',38.4), ('CREDICARDPOSGRANPRO','GRANPRO',38.4)]:
             self.assertEqual(normalizar_canal(valor),canon)
             r=resultados();df=r['final'];df['CANAL']=valor;df['ESTATUS CXC']='AL CONTADO'
             df['VENDEDOR AGENTE AUTORIZADO']=valor
