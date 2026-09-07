@@ -70,6 +70,10 @@ no aplica reparto de Jornada. Jornada exige coincidencia de BANCO y canal.
 Las filas sin importes se completan únicamente cuando no hay dudas.
 ESTATUS CXC define la modalidad. Las ventas normales usan CANAL como beneficiario
 y fuente de tarifa, sin fallback a VENDEDOR ni a la columna de Jornada.
+`normalizar_canal` centraliza los alias exactos OCCIDENTE/ORIENTE/CENTRO hacia
+REGION OCCIDENTE/REGION ORIENTE/REGION CENTRO. CENTRO TIPO II es independiente.
+Las nuevas se exportan con CANAL y beneficiario canónicos; los valores históricos
+existentes se conservan y solo se normalizan internamente para el cálculo.
 CANAL exactamente CREDICARDPOS usa VENDEDOR como Freelancer (10), o Persona/Bancaribe
 (10 + 10), después de la detección de Jornada BT y sujeto a la excepción Bancaribe
 sin barra. CREDICARDPOS nunca se asigna como agente. Bancos o roles sin persona
@@ -102,6 +106,11 @@ mantisas científicas resumidas como fuente definitiva. La falta de fuente fiabl
 aparece en revisión sin proponer ceros reconstruidos. Los tests de
 `test_fuente_serial_r34.py` verifican CSV por chunks, prefijos, fallback y paridad
 entre la revisión y el procesamiento automático para Castle, Zappy y Pinpagos.
+
+`test_tipos_canal.py` reproduce asignaciones de None a campos numéricos de
+revalidación, textos en columnas antes vacías y la conversión Oficina/Jornada.
+La asignación usa tipos explícitos por columna y omite campos sin cambios;
+las fórmulas o marcas mixtas históricas no se convierten a números ni se borran.
 
 Los sufijos TX mensuales se conservan como parte del encabezado; no se equipara
 la columna con _1 a la columna sin sufijo. No se asignan meses hasta confirmar

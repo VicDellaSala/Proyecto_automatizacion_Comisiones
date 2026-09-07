@@ -10,7 +10,7 @@ from reglas_comisiones import PRECIOS_BASE
 from revision_manual import preparar_descarga
 
 
-VERSION_APP = "5.2-SERIAL-DESDE-TERMINAL"
+VERSION_APP = "5.3-TIPOS-Y-CANAL"
 
 
 st.set_page_config(

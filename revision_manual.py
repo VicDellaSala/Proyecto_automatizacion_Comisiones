@@ -85,13 +85,53 @@ def _revalidar(df, ids, resultados, precios, estado):
     mascara = df['__ROW_ID'].isin(ids) & df['__ORIGEN'].eq('VENTAS_NUEVAS')
     if not mascara.any():
         return df
-    parte = recalcular_comisiones(df.loc[mascara].copy(), resultados['r34'],
+    entrada = df.loc[mascara].copy()
+    originales = df.attrs.get('encabezados_comisiones', {})
+    textos = {'VENDEDOR BANCO', 'VENDEDOR / FREELANCE', 'VENDEDOR AGENTE AUTORIZADO',
+              'OBSERVACION', 'CANAL', 'CANAL DE VENTA (JORNADA QUE PERTENECE)',
+              '__REGLA_COMISION', '__ADVERTENCIA_COMISION', '__MOTIVO_REVISION'}
+    for c in entrada:
+        if normalizar_texto(originales.get(c, c)) in textos and pd.api.types.is_numeric_dtype(entrada[c].dtype):
+            entrada[c] = entrada[c].astype(object)
+    parte = recalcular_comisiones(entrada, resultados['r34'],
         resultados['afiliados_access'], mes_r34=resultados.get('mes_r34'), precios=precios)
     salida = df.copy()
+    numericas = {'MONTO COMISION BANCO $', 'MONTO COMISION VENDEDOR/FREELANCE $',
+                 'MONTO COMISION AGENTE AUTORIZADO $', 'MONTO TOTAL A PAGAR $',
+                 '__MONTO_TX_R34', '__TOTAL_COMISION_CALCULADO',
+                 '__DIFERENCIA_CUADRE_COMISION', '__MONTO_PENDIENTE_ASIGNACION'}
+    fechas = {'FECHA', 'FECHA DE PAGO', 'FECHA DE ARCHIVO', 'FECHA DE SOLICITUD RECIBIDA'}
     for c in parte:
+        valores = parte[c]
+        nombre = normalizar_texto(originales.get(c, c))
+        if c in salida:
+            anteriores = salida.loc[parte.index, c]
+            iguales = anteriores.eq(valores).fillna(False) | (anteriores.isna() & valores.isna())
+            if iguales.all():
+                continue  # No tocar columnas que el recálculo no cambió.
         if c not in salida:
             salida[c] = pd.Series(None, index=salida.index, dtype=object)
-        salida.loc[parte.index, c] = parte[c]
+        if nombre in numericas:
+            valores = pd.to_numeric(valores, errors='coerce').astype('float64')
+            existentes = pd.to_numeric(salida[c], errors='coerce')
+            mixtos = salida[c].notna() & existentes.isna()
+            # Fórmulas y marcas históricas se conservan como contenido mixto.
+            salida[c] = salida[c].astype(object) if mixtos.any() else existentes.astype('float64')
+        elif nombre in fechas or pd.api.types.is_datetime64_any_dtype(valores.dtype):
+            valores = pd.to_datetime(valores, errors='coerce')
+            existentes = pd.to_datetime(salida[c], errors='coerce')
+            mixtos = salida[c].notna() & existentes.isna()
+            salida[c] = salida[c].astype(object) if mixtos.any() else existentes
+        elif pd.api.types.is_bool_dtype(valores.dtype):
+            if not pd.api.types.is_bool_dtype(salida[c].dtype):
+                salida[c] = salida[c].astype('boolean')
+                valores = valores.astype('boolean')
+        else:
+            # Texto, identificadores y campos realmente mixtos, sin coerción global.
+            if not (isinstance(salida[c].dtype, pd.StringDtype)
+                    and valores.map(lambda v: isinstance(v, str) or pd.isna(v)).all()):
+                salida[c] = salida[c].astype(object)
+        salida.loc[parte.index, c] = valores
     obs = columna_observacion_comisiones(salida)
     for row_id, texto in estado.get('observaciones', {}).items():
         m = salida['__ROW_ID'].eq(row_id)

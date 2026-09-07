@@ -169,7 +169,10 @@ class RevisionTests(unittest.TestCase):
         self.assertEqual(fila['MONTO COMISION AGENTE AUTORIZADO $'], 10)
         self.assertEqual(fila['MONTO TOTAL A PAGAR $'], 20)
         self.assertEqual(fila['__DIFERENCIA_CUADRE_COMISION'], 0)
-        pd.testing.assert_frame_equal(n['final'].loc[:, r['final'].columns].iloc[:1], r['final'].iloc[:1])
+        izquierda = n['final'].loc[:, r['final'].columns].iloc[:1]
+        derecha = r['final'].iloc[:1]
+        pd.testing.assert_frame_equal(izquierda.astype(object).where(izquierda.notna(), None),
+                                      derecha.astype(object).where(derecha.notna(), None))
         self.assertFalse(incidencias(n['final'], n['r34'])[3])
 
     def test_historicos_no_bloquean_ni_indices_definen_origen(self):

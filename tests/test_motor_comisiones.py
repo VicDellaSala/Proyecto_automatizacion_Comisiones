@@ -133,7 +133,7 @@ class AplicacionMotorTests(unittest.TestCase):
         for texto in ['BANCO TESORO', 'TESORO', 'PREJORNADA TESORO', 'JORNADA TESOROS']:
             self.assertIsNot(identificar_jornada('TESORO', texto), True)
 
-    def test_alias_occidente_exacto_y_salida_original(self):
+    def test_alias_occidente_exacto_y_salida_canonica(self):
         self.assertEqual(normalizar_agente('  occidente '), 'REGION OCCIDENTE')
         for valor in ['AGENTE OCCIDENTE', 'OCCIDENTE NUEVO', 'OCCIDENTES']:
             self.assertIsNone(normalizar_agente(valor))
@@ -142,7 +142,7 @@ class AplicacionMotorTests(unittest.TestCase):
             base['CANAL'], base['ESTATUS CXC'] = canal, 'AL CONTADO'
             base['VENDEDOR AGENTE AUTORIZADO'] = ''
             r = self.aplicar(base).iloc[0]
-            self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], canal)
+            self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], 'REGION OCCIDENTE')
             self.assertEqual(r['MONTO COMISION AGENTE AUTORIZADO $'], 25)
             self.assertEqual(r['MONTO TOTAL A PAGAR $'], 25)
             self.assertFalse(r['__REQUIERE_REVISION'])
@@ -228,7 +228,7 @@ class AplicacionMotorTests(unittest.TestCase):
                 r = self.aplicar(base).iloc[0]
                 self.assertEqual(r['MONTO TOTAL A PAGAR $'], total)
                 self.assertEqual(r['MONTO COMISION AGENTE AUTORIZADO $'], total)
-                self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], agente)
+                self.assertEqual(r['VENDEDOR AGENTE AUTORIZADO'], normalizar_agente(agente))
                 self.assertEqual(r['__DIFERENCIA_CUADRE_COMISION'], 0)
 
     def test_vendedor_barra_desde_columna_original(self):

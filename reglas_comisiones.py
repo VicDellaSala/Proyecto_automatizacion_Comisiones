@@ -111,7 +111,8 @@ def _beneficiario(valor):
 def normalizar_agente(valor):
     texto = normalizar_texto(_texto(valor))
     aliases = {'CREDICARDPOSGRANPRO': 'GRANPRO', 'INVERSIONES TPOS': 'INV TPOS',
-               'OCCIDENTE': 'REGION OCCIDENTE'}
+               'OCCIDENTE': 'REGION OCCIDENTE', 'ORIENTE': 'REGION ORIENTE',
+               'CENTRO': 'REGION CENTRO'}
     if texto in aliases:
         return aliases[texto]
     if texto in AGENTES_16 or texto in TARIFAS_CONTADO:
@@ -120,6 +121,11 @@ def normalizar_agente(valor):
         if re.fullmatch(agente + r'\s*\d+(?:\s+C\.?A\.?)?', texto):
             return agente
     return None
+
+
+def normalizar_canal(valor):
+    """Canal comercial canónico; nunca interpreta la columna de Jornada."""
+    return normalizar_agente(valor) or normalizar_texto(_texto(valor))
 
 
 def _fecha_tarifa(valor):
@@ -354,6 +360,14 @@ def aplicar_motor_comisiones(df, precios=None):
     if '__REQUIERE_REVISION' not in resultado:
         resultado['__REQUIERE_REVISION'] = False
     for idx, fila in df.iterrows():
+        fila = fila.copy()
+        if canales[0]:
+            fila[canales[0]] = normalizar_canal(fila[canales[0]])
+            if fila.get('__ORIGEN') == 'VENTAS_NUEVAS':
+                resultado.at[idx, canales[0]] = fila[canales[0]]
+                agente_actual = _beneficiario(fila[destinos['vendedor_agente']])
+                if agente_actual:
+                    resultado.at[idx, destinos['vendedor_agente']] = normalizar_agente(agente_actual) or agente_actual
         datos = {k: fila.get(c) if c else None for k, c in entradas.items()}
         for k in ('vendedor_banco', 'vendedor_freelance', 'vendedor_agente'):
             datos[k] = _beneficiario(fila[destinos[k]])
