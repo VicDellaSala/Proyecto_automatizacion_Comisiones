@@ -39,6 +39,8 @@ def mostrar_revision(resultados, precios):
                 if paso == 2:
                     st.write('SERIAL ACTUAL EN COMISIONES:', caso['serial'] or '(vacío)')
                     st.write('SERIAL ENCONTRADO EN R34:', ', '.join(caso['opciones']))
+                    if caso.get('sin_fuente_confiable'):
+                        st.warning('R34 contiene un registro sin fuente de serial exacta y confiable. Se conserva el serial de Comisiones por defecto.')
                 key = f'revision_{paso}_{row_id}'
                 opcion = st.selectbox('Decisión', list(opciones[paso]), key=key)
                 accion = opciones[paso][opcion]

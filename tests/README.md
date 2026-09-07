@@ -94,6 +94,15 @@ La normalización compartida expande notación científica con Decimal sin inven
 dígitos perdidos en mantisas redondeadas. Pinpagos comparte el selector de serial
 del procesamiento. Se conserva la copia ZIP de baja memoria.
 
+La fuente de SERIAL R34 para todos los equipos prioriza el prefijo textual de
+TERMINAL. La extracción está anclada al inicio, conserva los dígitos y elimina
+el relleno inicial según la regla existente. Sin prefijo válido, solo se acepta
+un SERIAL fiable: se conserva el texto original del CSV y se rechazan floats y
+mantisas científicas resumidas como fuente definitiva. La falta de fuente fiable
+aparece en revisión sin proponer ceros reconstruidos. Los tests de
+`test_fuente_serial_r34.py` verifican CSV por chunks, prefijos, fallback y paridad
+entre la revisión y el procesamiento automático para Castle, Zappy y Pinpagos.
+
 Los sufijos TX mensuales se conservan como parte del encabezado; no se equipara
 la columna con _1 a la columna sin sufijo. No se asignan meses hasta confirmar
 el significado de _1. Los archivos de entrada reales se analizan desde sus

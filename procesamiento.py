@@ -17,7 +17,7 @@ import pandas as pd
 
 from reglas_comisiones import estandarizar_equipo, aplicar_motor_comisiones
 
-VERSION_PROCESAMIENTO = "4.4-ALIAS-TESORO-OCCIDENTE"
+VERSION_PROCESAMIENTO = "5.2-SERIAL-DESDE-TERMINAL"
 
 
 HOJA_COMISIONES = "VENTAS"
@@ -661,14 +661,15 @@ def detectar_csv(stream):
 
 def extraer_serial_terminal_r34(valor):
     """
-    El campo TERMINAL del R34 puede venir así:
-    000181252538805 [00995] CASTLES DYNAMO...
-    Conservamos el primer bloque numérico largo.
+    Extrae únicamente el prefijo numérico largo del TERMINAL textual.
+    El resto del campo contiene metadatos; no se buscan números intermedios.
     """
-    texto = normalizar_identificador(valor)
+    if not isinstance(valor, str):
+        return ''
+    texto = valor.strip()
 
-    match = re.search(
-        r"\d{8,}",
+    match = re.match(
+        r"([0-9]{8,})(?=\s|\[|$)",
         texto
     )
 
@@ -679,7 +680,7 @@ def extraer_serial_terminal_r34(valor):
         # solo si realmente existen.
         serial_limpio = serial.lstrip("0")
 
-        return serial_limpio or "0"
+        return serial_limpio
 
     return ""
 
@@ -847,6 +848,7 @@ def procesar_csv_r34(
             ] = ""
 
         if columnas["serial"]:
+            filtrado['__SERIAL_R34_ORIGINAL'] = filtrado[columnas['serial']]
             filtrado[
                 "__SERIAL_R34"
             ] = filtrado[
@@ -855,6 +857,7 @@ def procesar_csv_r34(
                 normalizar_identificador
             )
         else:
+            filtrado['__SERIAL_R34_ORIGINAL'] = ''
             filtrado[
                 "__SERIAL_R34"
             ] = ""
@@ -919,6 +922,7 @@ def procesar_csv_r34(
                     "__AFILIADO",
                     "__TERMINAL_NUM",
                     "__SERIAL_R34",
+                    "__SERIAL_R34_ORIGINAL",
                     "__SERIAL_TERMINAL_R34",
                     "__MONTO_TX",
                 ]
@@ -937,6 +941,7 @@ def procesar_csv_r34(
                 "__AFILIADO",
                 "__TERMINAL_NUM",
                 "__SERIAL_R34",
+                "__SERIAL_R34_ORIGINAL",
                 "__SERIAL_TERMINAL_R34",
                 "__MONTO_TX",
             ]
@@ -1979,13 +1984,36 @@ def calcular_observacion(estado_tx, access, equipo, validacion=None):
 
 
 def serial_r34_para_equipo(registro, equipo):
-    valor = registro.get('__SERIAL_R34', '')
-    if estandarizar_equipo(equipo) == 'Pinpagos':
-        terminal = registro.get('__SERIAL_TERMINAL_R34', '')
-        if terminal is None or pd.isna(terminal) or not str(terminal).strip():
-            terminal = extraer_serial_terminal_r34(registro.get('TERMINAL', ''))
-        valor = terminal or valor
-    return normalizar_identificador(valor).upper()
+    """Única prioridad de fuente para Castle, Zappy y Pinpagos.
+
+    Vacío significa que ninguna fuente permite identificar el serial con seguridad.
+    Se conserva el original del CSV para no confundir una expansión con precisión.
+    """
+    if 'TERMINAL' in registro:
+        terminal = extraer_serial_terminal_r34(registro['TERMINAL'])
+    else:
+        # Campo generado exclusivamente por extraer_serial_terminal_r34 al leer.
+        terminal = normalizar_identificador(registro.get('__SERIAL_TERMINAL_R34', ''))
+        if not re.fullmatch(r'[0-9]+', terminal) or not terminal.strip('0'):
+            terminal = ''
+    if terminal:
+        return terminal
+    valor = registro.get('__SERIAL_R34_ORIGINAL', registro.get('__SERIAL_R34', ''))
+    if valor is None or pd.isna(valor) or isinstance(valor, float):
+        return ''
+    texto = re.sub(r'\s+', '', str(valor))
+    if re.fullmatch(r'[+]?\d+(?:[.,]\d+)?[eE][+-]?\d+', texto):
+        # Una mantisa resumida deja posiciones enteras sin dígitos explícitos.
+        # No aceptar esos ceros expandidos como evidencia del identificador.
+        if Decimal(texto.replace(',', '.')).as_tuple().exponent > 0:
+            return ''
+    try:
+        normalizado = normalizar_identificador(valor).upper()
+    except ValueError:
+        return ''
+    if normalizado in {'', 'N/A', 'N/D', 'NA', 'ND', 'NONE', 'NAN', '-'}:
+        return ''
+    return normalizado if re.fullmatch(r'[A-Z0-9]+', normalizado) else ''
 
 
 def combinar_observacion(actual, sugerida, automatica_anterior=""):
@@ -2359,6 +2387,8 @@ def recalcular_comisiones(
             )
 
             serial_r34 = serial_r34_para_equipo(registro_r34, equipo)
+            if not serial_r34:
+                razones.append('R34 sin fuente de serial exacta y confiable; requiere revisión.')
 
         serial_r34 = normalizar_identificador(
             serial_r34

@@ -41,13 +41,17 @@ def incidencias(df, r34, decisiones=None):
     claves_nuevas = set(df.loc[nuevas, identidad['concatenar']].map(normalizar_serial))
     if not r34.empty:
         terminales = r34['__SERIAL_TERMINAL_R34'] if '__SERIAL_TERMINAL_R34' in r34 else repeat('')
-        for clave, serial, terminal, terminal_original in zip(r34['__CONCATENAR'], r34['__SERIAL_R34'],
-                terminales, r34['TERMINAL'] if 'TERMINAL' in r34 else repeat('')):
+        for clave, serial, terminal, terminal_original, serial_original in zip(r34['__CONCATENAR'], r34['__SERIAL_R34'],
+                terminales, r34['TERMINAL'] if 'TERMINAL' in r34 else repeat(''),
+                r34['__SERIAL_R34_ORIGINAL'] if '__SERIAL_R34_ORIGINAL' in r34 else repeat(None)):
             clave = normalizar_serial(clave)
             if clave and clave in claves_nuevas:
-                registro = {'__SERIAL_R34': serial, '__SERIAL_TERMINAL_R34': terminal, 'TERMINAL': terminal_original}
-                candidatos.setdefault(clave, set()).add((serial_r34_para_equipo(registro, 'Castle Dynamo'),
-                                                        serial_r34_para_equipo(registro, 'Pinpagos')))
+                registro = {'__SERIAL_R34': serial, '__SERIAL_TERMINAL_R34': terminal}
+                if 'TERMINAL' in r34:
+                    registro['TERMINAL'] = terminal_original
+                if '__SERIAL_R34_ORIGINAL' in r34:
+                    registro['__SERIAL_R34_ORIGINAL'] = serial_original
+                candidatos.setdefault(clave, set()).add(serial_r34_para_equipo(registro, None))
     banco_col = columna(df, 'BANCO')
     jornada_col = columna(df, 'CANAL DE VENTA (JORNADA QUE PERTENECE)')
     casos = {1: [], 2: [], 3: []}
@@ -63,15 +67,14 @@ def incidencias(df, r34, decisiones=None):
             agregar(1, row_id, (serial, tuple(relacionados)), relacionados=relacionados)
         clave = normalizar_serial(fila[identidad['concatenar']])
         opciones = set()
-        for serial_r34, terminal_r34 in candidatos.get(clave, []):
-            valor = serial_r34
-            if estandarizar_equipo(fila[identidad['equipo']]) == 'Pinpagos':
-                valor = terminal_r34 or valor
+        for valor in candidatos.get(clave, []):
             if normalizado := normalizar_serial(valor):
                 opciones.add(normalizado)
         opciones = tuple(sorted(opciones))
-        if opciones and (len(opciones) > 1 or serial not in opciones):
-            agregar(2, row_id, (clave, serial, opciones), serial=serial, opciones=opciones)
+        sin_fuente = '' in candidatos.get(clave, set())
+        if sin_fuente or (opciones and (len(opciones) > 1 or serial not in opciones)):
+            agregar(2, row_id, (clave, serial, opciones, sin_fuente), serial=serial, opciones=opciones,
+                    sin_fuente_confiable=sin_fuente)
         banco, contexto = fila[banco_col], fila[jornada_col]
         if normalizar_texto(banco) in {'TESORO', 'BANCO DEL TESORO'} and identificar_jornada(banco, contexto) is not True:
             agregar(3, row_id, (normalizar_texto(banco), normalizar_texto(contexto)))
