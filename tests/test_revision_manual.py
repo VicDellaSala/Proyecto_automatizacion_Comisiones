@@ -29,6 +29,76 @@ def resultados(seriales=('A', 'B'), origenes=('COMISIONES', 'VENTAS_NUEVAS')):
 
 
 class RevisionTests(unittest.TestCase):
+    def test_formato_conserva_prefijos_excel(self):
+        from formato_revision import _serializar
+        import xml.etree.ElementTree as ET
+        original=b'<ns0:root xmlns:ns0="urn:root" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x14="urn:x14" mc:Ignorable="x14"/>'
+        salida=_serializar(ET.fromstring(original),original)
+        ET.fromstring(salida)
+        self.assertIn(b'xmlns:x14="urn:x14"',salida)
+    def test_cientifico_exacto_y_pinpagos_regla_compartida(self):
+        from decimal import Decimal
+        from procesamiento import normalizar_identificador, serial_r34_para_equipo
+        for valor in ['1.23456789012E+11','1,23456789012E+11','123456789012.0',
+                      Decimal('1.23456789012E+11'), 123456789012.0]:
+            self.assertEqual(normalizar_identificador(valor),'123456789012')
+        self.assertEqual(normalizar_identificador('1,23457E+11'),'123457000000')
+        with self.assertRaises(ValueError):
+            normalizar_identificador(float(2**54))
+        for equipo, registro in [('Castle Dynamo', {'__SERIAL_R34':'1.23456789012E+11'}),
+            ('Pinpagos', {'__SERIAL_R34':'NOCOINCIDE','TERMINAL':'000123456789012 [001] POS'}),
+            ('Pinpagos', {'__SERIAL_R34':'NOCOINCIDE','__SERIAL_TERMINAL_R34':'123456789012.0'})]:
+            r=resultados(('A','123456789012'));r['final'].loc[1,'EQUIPO']=equipo
+            r['r34']=pd.DataFrame([dict(registro,__CONCATENAR='1011')])
+            self.assertEqual(serial_r34_para_equipo(registro,equipo),'123456789012')
+            self.assertFalse(incidencias(r['final'],r['r34'])[2])
+
+    def test_defaults_no_modifican_ni_bloquean(self):
+        r=resultados(('A','A'));r['final']['BANCO']='TESORO'
+        r['r34']=pd.DataFrame({'__CONCATENAR':['1011'],'__SERIAL_R34':['Z']})
+        self.assertTrue(all(incidencias(r['final'],r['r34']).values()))
+        pd.testing.assert_frame_equal(preparar_descarga(r,{})['final'],r['final'])
+
+    def test_elegir_historica_o_nueva_roja_exportada(self):
+        from openpyxl.styles import Border, Side
+        from revision_manual import tabla_comisiones
+        for elegido in [1000,1001]:
+            r=resultados(('A','A'));original=r['final'].copy()
+            n,estado=aplicar_decision(r,{},1,1001,'desinstalado',fila_elegida=elegido)
+            self.assertEqual(n['final'].loc[n['final']['__ROW_ID'].eq(elegido),'OBSERVACION'].item(),'DESINSTALADO')
+            self.assertEqual(n['final'].loc[n['final']['__ROW_ID'].ne(elegido),'OBSERVACION'].item(),'')
+            pd.testing.assert_series_equal(n['final']['ESTATUS'],original['ESTATUS'])
+            tabla=tabla_comisiones(n['final'],[1000,1001])
+            self.assertEqual(tabla.columns[tabla.columns.get_loc('ESTATUS')+1],'OBSERVACION')
+            cols=[c for c in original if not c.startswith('__')]
+            wb=Workbook();ws=wb.active;ws.title='VENTAS';ws.append(cols)
+            ws.append([original.iloc[0][c] for c in cols])
+            for c in ws[2]:
+                c.border=Border(bottom=Side(style='thin'))
+                c.number_format='0.00'
+            b=io.BytesIO();wb.save(b)
+            n.update(bytes_comisiones_original=b.getvalue(),hoja_comisiones='VENTAS')
+            ws=load_workbook(io.BytesIO(generar_excel_resultado(preparar_descarga(n,estado))))['VENTAS']
+            for c in ws[elegido-1000+2]:
+                self.assertEqual(c.font.color.rgb,'FFFF0000')
+                self.assertEqual(c.border.bottom.style,'thin')
+                self.assertEqual(c.number_format,'0.00')
+
+    def test_eliminar_historica_preserva_fila_superviviente(self):
+        r=resultados(('A','B','A'),('COMISIONES','COMISIONES','VENTAS_NUEVAS'))
+        original=r['final'].copy();n,estado=aplicar_decision(r,{},1,1002,'eliminar',fila_elegida=1000)
+        cols=[c for c in original if not c.startswith('__')]
+        wb=Workbook();ws=wb.active;ws.title='VENTAS';ws.append(cols)
+        for i in range(2):ws.append([original.iloc[i][c] for c in cols])
+        pos=cols.index('MONTO TOTAL A PAGAR $')+1
+        ws.cell(3,pos,'=1+1')
+        b=io.BytesIO();wb.save(b);n.update(bytes_comisiones_original=b.getvalue(),hoja_comisiones='VENTAS')
+        ws=load_workbook(io.BytesIO(generar_excel_resultado(n)))['VENTAS']
+        self.assertEqual(ws.cell(2,cols.index('SERIAL')+1).value,'B')
+        self.assertEqual(ws.cell(3,cols.index('SERIAL')+1).value,'A')
+        self.assertEqual(ws.cell(2,pos).value,'=1+1')
+        self.assertEqual(list(n['final']['__ROW_ID']),[1001,1002])
+
     def test_normalizacion_y_alcance_duplicados(self):
         self.assertEqual(normalizar_serial(' a b '), 'AB')
         self.assertEqual(normalizar_serial(123.0), '123')
@@ -49,7 +119,7 @@ class RevisionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 aplicar_decision(r, {}, 1, 1000, accion)
             nuevo, estado = aplicar_decision(r, {}, 1, 1001, accion)
-            pd.testing.assert_frame_equal(nuevo['final'].iloc[:1], historica)
+            pd.testing.assert_frame_equal(nuevo['final'][historica.columns].iloc[:1], historica)
             self.assertFalse(any(incidencias(nuevo['final'], nuevo['r34'], deepcopy(estado['decisiones'])).values()))
             if accion == 'eliminar':
                 self.assertEqual(list(nuevo['final']['__ROW_ID']), [1000])
@@ -82,8 +152,7 @@ class RevisionTests(unittest.TestCase):
         r['r34'] = pd.DataFrame({'__CONCATENAR': ['1011'], '__SERIAL_R34': ['A']})
         n, estado = aplicar_decision(r, {}, 2, 1001, 'r34', serial='A')
         self.assertEqual(len(incidencias(n['final'], n['r34'], estado['decisiones'])[1]), 1)
-        with self.assertRaises(ValueError):
-            preparar_descarga(n, estado)
+        preparar_descarga(n, estado)
 
     def test_tesoro_nuevo_mantener_o_recalcular(self):
         r = resultados()
@@ -119,8 +188,7 @@ class RevisionTests(unittest.TestCase):
         original = r['final'].copy()
         r['final'].loc[2, 'BANCO'] = 'TESORO'
         r['r34'] = pd.DataFrame({'__CONCATENAR': ['1031'], '__SERIAL_R34': ['Z']})
-        with self.assertRaises(ValueError):
-            preparar_descarga(r, {})
+        pd.testing.assert_frame_equal(preparar_descarga(r, {})['final'], r['final'])
         n, estado = aplicar_decision(r, {}, 1, 1001, 'eliminar')
         n, estado = aplicar_decision(n, estado, 2, 1003, 'r34', serial='Z')
         n, estado = aplicar_decision(n, estado, 3, 1002, 'jornada')
@@ -170,8 +238,8 @@ class RevisionTests(unittest.TestCase):
         fake = MagicMock()
         fake.session_state = {}
         fake.columns.return_value = [MagicMock(),MagicMock(),MagicMock()]
-        fake.selectbox.return_value = 'Mantener / Validado'
-        fake.form_submit_button.return_value = True
+        fake.selectbox.side_effect = ['Marcar como DESINSTALADO',1001]
+        fake.button.return_value = True
         fake.rerun.side_effect = RuntimeError('rerun')
         r=resultados(('A','A'));fake.session_state['resultados']=r
         spec=importlib.util.spec_from_file_location('ui_prueba',Path(__file__).parents[1]/'revision_ui.py')
@@ -179,6 +247,6 @@ class RevisionTests(unittest.TestCase):
             ui=importlib.util.module_from_spec(spec);spec.loader.exec_module(ui)
             with self.assertRaisesRegex(RuntimeError,'rerun'):
                 ui.mostrar_revision(r,None)
-            fake.form_submit_button.return_value=False
+            fake.button.return_value=False
             self.assertFalse(ui.mostrar_revision(fake.session_state['resultados'],None))
             self.assertIn((1,1001),fake.session_state['revision_nuevas']['decisiones'])

@@ -5,7 +5,7 @@ from itertools import repeat
 import pandas as pd
 
 from procesamiento import (resolver_identidad_comisiones, normalizar_identificador,
-    columna_observacion_comisiones, columnas_publicas_comisiones, recalcular_comisiones)
+    columna_observacion_comisiones, columnas_publicas_comisiones, recalcular_comisiones, serial_r34_para_equipo)
 from reglas_comisiones import normalizar_texto, identificar_jornada, estandarizar_equipo, validar_cuadre
 
 
@@ -41,11 +41,13 @@ def incidencias(df, r34, decisiones=None):
     claves_nuevas = set(df.loc[nuevas, identidad['concatenar']].map(normalizar_serial))
     if not r34.empty:
         terminales = r34['__SERIAL_TERMINAL_R34'] if '__SERIAL_TERMINAL_R34' in r34 else repeat('')
-        for clave, serial, terminal in zip(r34['__CONCATENAR'], r34['__SERIAL_R34'],
-                terminales):
+        for clave, serial, terminal, terminal_original in zip(r34['__CONCATENAR'], r34['__SERIAL_R34'],
+                terminales, r34['TERMINAL'] if 'TERMINAL' in r34 else repeat('')):
             clave = normalizar_serial(clave)
             if clave and clave in claves_nuevas:
-                candidatos.setdefault(clave, set()).add((normalizar_serial(serial), normalizar_serial(terminal)))
+                registro = {'__SERIAL_R34': serial, '__SERIAL_TERMINAL_R34': terminal, 'TERMINAL': terminal_original}
+                candidatos.setdefault(clave, set()).add((serial_r34_para_equipo(registro, 'Castle Dynamo'),
+                                                        serial_r34_para_equipo(registro, 'Pinpagos')))
     banco_col = columna(df, 'BANCO')
     jornada_col = columna(df, 'CANAL DE VENTA (JORNADA QUE PERTENECE)')
     casos = {1: [], 2: [], 3: []}
@@ -89,31 +91,42 @@ def _revalidar(df, ids, resultados, precios, estado):
         salida.loc[parte.index, c] = parte[c]
     obs = columna_observacion_comisiones(salida)
     for row_id, texto in estado.get('observaciones', {}).items():
-        m = salida['__ROW_ID'].eq(row_id) & salida['__ORIGEN'].eq('VENTAS_NUEVAS')
+        m = salida['__ROW_ID'].eq(row_id)
         salida.loc[m, obs] = texto
     return salida
 
 
-def aplicar_decision(resultados, estado, paso, row_id, accion, serial=None, precios=None):
-    """Transacción: devuelve copias; nunca modifica una fila histórica."""
+def aplicar_decision(resultados, estado, paso, row_id, accion, serial=None, precios=None, fila_elegida=None):
+    """Transacción; paso 1 permite actuar en la fila relacionada elegida."""
     estado = deepcopy(estado)
     decisiones = estado.setdefault('decisiones', {})
     df = resultados['final'].copy()
+    if accion == 'eliminar' and '__FILA_EXCEL_ORIGINAL' not in df:
+        df['__FILA_EXCEL_ORIGINAL'] = pd.Series(None, index=df.index, dtype=object)
+        historicas = df['__ORIGEN'].eq('COMISIONES')
+        df.loc[historicas, '__FILA_EXCEL_ORIGINAL'] = list(range(2, 2+int(historicas.sum())))
     casos = incidencias(df, resultados['r34'], decisiones)
     caso = next((c for c in casos.get(paso, []) if c['row_id'] == row_id), None)
     if caso is None:
         raise ValueError('El caso ya no está pendiente o no corresponde a una venta nueva.')
     idx = df.index[df['__ROW_ID'].eq(row_id)][0]
+    objetivo = row_id
+    if paso == 1 and accion in {'eliminar', 'desinstalado'}:
+        objetivo = row_id if fila_elegida is None else fila_elegida
+        if objetivo not in caso['relacionados']:
+            raise ValueError('La fila elegida no pertenece al grupo duplicado.')
+        idx = df.index[df['__ROW_ID'].eq(objetivo)][0]
     permitidas = {1: {'eliminar', 'desinstalado', 'mantener'},
                   2: {'comisiones', 'r34'}, 3: {'mantener', 'jornada'}}
     if accion not in permitidas[paso]:
         raise ValueError('Acción no válida para este paso.')
     if accion == 'eliminar':
         df = df.drop(index=idx)
-        estado.setdefault('eliminadas', set()).add(row_id)
+        estado.setdefault('eliminadas', set()).add(objetivo)
     elif accion == 'desinstalado':
         df.at[idx, columna_observacion_comisiones(df)] = 'DESINSTALADO'
-        estado.setdefault('observaciones', {})[row_id] = 'DESINSTALADO'
+        estado.setdefault('observaciones', {})[objetivo] = 'DESINSTALADO'
+        df.loc[idx, '__ROJO_MANUAL'] = True
     elif accion == 'r34':
         serial = normalizar_serial(serial)
         if serial not in caso['opciones']:
@@ -150,8 +163,6 @@ def aplicar_decision(resultados, estado, paso, row_id, accion, serial=None, prec
 
 def preparar_descarga(resultados, estado, precios=None):
     df = _revalidar(resultados['final'], estado.get('afectadas', set()), resultados, precios, estado)
-    if any(incidencias(df, resultados['r34'], estado.get('decisiones')).values()):
-        raise ValueError('Debes completar las revisiones manuales pendientes de las ventas nuevas antes de generar el Excel.')
     for _, fila in df[df['__ROW_ID'].isin(estado.get('afectadas', set()))].iterrows():
         cuadre = validar_cuadre(*(fila[columna(df, n)] for n in
             ['MONTO COMISION BANCO $', 'MONTO COMISION VENDEDOR/FREELANCE $',
@@ -172,7 +183,7 @@ def tabla_comisiones(df, ids):
                'MONTO COMISION VENDEDOR/FREELANCE $', 'MONTO COMISION AGENTE AUTORIZADO $',
                'MONTO TOTAL A PAGAR $'}
     columnas += [c for c in df if normalizar_texto(originales.get(c, c)) in nombres and c not in columnas]
-    columnas.append(columna_observacion_comisiones(df))
+    columnas.insert(columnas.index(columna(df, 'ESTATUS'))+1, columna_observacion_comisiones(df))
     filas = df[df['__ROW_ID'].isin(ids)]
     tabla = filas[columnas].copy().astype('string').fillna('')
     tabla.insert(0, 'Origen', filas['__ORIGEN'].map(lambda v: 'NUEVA' if v == 'VENTAS_NUEVAS' else 'HISTÓRICA'))

@@ -9,6 +9,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 from copy import copy
+from decimal import Decimal
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -254,6 +255,7 @@ def normalizar_texto(valor):
         return ""
 
     texto = str(valor).strip()
+
     texto = unicodedata.normalize("NFKD", texto)
 
     texto = "".join(
@@ -341,6 +343,15 @@ def normalizar_identificador(valor):
         pass
 
     texto = str(valor).strip()
+
+    if isinstance(valor, float) and abs(valor) > 2**53:
+        raise ValueError('Identificador numérico fuera del rango de precisión exacta; usar el valor original como texto.')
+    compacto = re.sub(r'\s+', '', texto)
+    if re.fullmatch(r'[+]?\d+(?:[.,]\d+)?[eE][+-]?\d+', compacto):
+        numero = Decimal(compacto.replace(',', '.'))
+        if numero != numero.to_integral_value() or abs(numero.adjusted()) > 100:
+            raise ValueError('Identificador científico no entero o fuera de rango.')
+        texto = format(numero, 'f').split('.')[0]
 
     if normalizar_texto(texto) in {
         "",
@@ -654,11 +665,7 @@ def extraer_serial_terminal_r34(valor):
     000181252538805 [00995] CASTLES DYNAMO...
     Conservamos el primer bloque numérico largo.
     """
-    texto = str(
-        valor
-        if valor is not None
-        else ""
-    ).strip()
+    texto = normalizar_identificador(valor)
 
     match = re.search(
         r"\d{8,}",
@@ -1971,6 +1978,16 @@ def calcular_observacion(estado_tx, access, equipo, validacion=None):
     return ""
 
 
+def serial_r34_para_equipo(registro, equipo):
+    valor = registro.get('__SERIAL_R34', '')
+    if estandarizar_equipo(equipo) == 'Pinpagos':
+        terminal = registro.get('__SERIAL_TERMINAL_R34', '')
+        if terminal is None or pd.isna(terminal) or not str(terminal).strip():
+            terminal = extraer_serial_terminal_r34(registro.get('TERMINAL', ''))
+        valor = terminal or valor
+    return normalizar_identificador(valor).upper()
+
+
 def combinar_observacion(actual, sugerida, automatica_anterior=""):
     """Elige el texto sin concatenarlo ni sobrescribir notas históricas/manuales.
 
@@ -2017,9 +2034,7 @@ def actualizar_observaciones(resultado, lookup, filas_evaluadas):
         fila = resultado.loc[idx]
         registro = lookup.get(fila["__CONCATENAR"], {})
         tx = estado_transaccion(registro.get("__MONTO_TX"))
-        serial_r34 = registro.get("__SERIAL_R34", "")
-        if fila["__EQUIPO_STD"] == "Pinpagos":
-            serial_r34 = registro.get("__SERIAL_TERMINAL_R34", "") or serial_r34
+        serial_r34 = serial_r34_para_equipo(registro, fila['__EQUIPO_STD'])
         valores_validacion = [fila.get(c, "") for c in
                               ("__AFILIADO", "__TERMINAL", "__SERIAL_COMISION")]
         valores_validacion.append(serial_r34)
@@ -2343,24 +2358,7 @@ def recalcular_comisiones(
                 "__MONTO_TX"
             )
 
-            if equipo == "Pinpagos":
-                serial_r34 = (
-                    registro_r34.get(
-                        "__SERIAL_TERMINAL_R34",
-                        ""
-                    )
-                    or registro_r34.get(
-                        "__SERIAL_R34",
-                        ""
-                    )
-                )
-            else:
-                serial_r34 = (
-                    registro_r34.get(
-                        "__SERIAL_R34",
-                        ""
-                    )
-                )
+            serial_r34 = serial_r34_para_equipo(registro_r34, equipo)
 
         serial_r34 = normalizar_identificador(
             serial_r34
@@ -3518,11 +3516,16 @@ def generar_excel_resultado(
                 ruta_hoja
             )
 
+            from formato_revision import conservar_filas_originales, aplicar_rojo
+            xml_hoja_original, originales_restantes = conservar_filas_originales(
+                xml_hoja_original, final, cantidad_original)
             xml_hoja_nuevo = _crear_xml_ventas_actualizado(
                 xml_hoja_original,
                 final,
-                cantidad_original,
+                originales_restantes,
             )
+            xml_hoja_nuevo, estilos_nuevos = aplicar_rojo(
+                xml_hoja_nuevo, zip_entrada.read('xl/styles.xml'), final)
 
             with zipfile.ZipFile(
                 ruta_salida,
@@ -3530,6 +3533,10 @@ def generar_excel_resultado(
             ) as zip_salida:
 
                 for info in zip_entrada.infolist():
+
+                    if info.filename == 'xl/styles.xml' and estilos_nuevos is not None:
+                        zip_salida.writestr(info, estilos_nuevos)
+                        continue
 
                     # La hoja VENTAS se reemplaza por
                     # nuestra versión actualizada.

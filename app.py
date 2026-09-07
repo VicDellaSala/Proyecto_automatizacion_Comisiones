@@ -10,7 +10,7 @@ from reglas_comisiones import PRECIOS_BASE
 from revision_manual import preparar_descarga
 
 
-VERSION_APP = "5.0-REVISION-NUEVAS"
+VERSION_APP = "5.1-REVISION-OPCIONAL"
 
 
 st.set_page_config(
@@ -631,7 +631,7 @@ if "resultados" not in st.session_state:
 
 if pendientes_manuales:
     st.session_state.pop("excel_final_generado", None)
-    st.warning("Debes completar las revisiones manuales pendientes de las ventas nuevas antes de generar el Excel.")
+    st.warning("Aplica los cambios seleccionados o vuelve a la opción de mantener antes de generar el Excel.")
     st.stop()
 
 if "excel_final_generado" not in st.session_state:

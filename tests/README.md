@@ -82,14 +82,17 @@ no escribe ESTATUS, TX, Access, observaciones ni fechas de pago.
 Fuera de alcance: mapeo temporal TX y reglas de distribución no confirmadas.
 
 La revisión manual consta de tres controles sobre `__ORIGEN=VENTAS_NUEVAS`:
-seriales repetidos (con históricas solo como referencia), serial operativo vs
+seriales repetidos (permitiendo elegir una histórica o nueva del grupo), serial operativo vs
 todos los candidatos R34 y Tesoro no Jornada. Las decisiones usan `__ROW_ID` y
 una firma de la evidencia para invalidarse si cambia el conflicto. Los tests
 de `test_revision_manual.py` comprueban eliminación, observación DESINSTALADO,
 elección de serial, recálculo de Jornada, persistencia de sesión simulada,
-bloqueo de descarga y exportación efectiva sin alterar el orden del maestro.
-Las advertencias históricas no bloquean estos controles. No se modifica el
-exportador de baja memoria ni se duplican tarifas en la interfaz.
+defaults que no bloquean descarga y exportación efectiva conservando el orden.
+Las decisiones explícitas permiten desinstalar o eliminar la fila elegida.
+DESINSTALADO colorea toda la fila con fuente roja, preservando los demás formatos.
+La normalización compartida expande notación científica con Decimal sin inventar
+dígitos perdidos en mantisas redondeadas. Pinpagos comparte el selector de serial
+del procesamiento. Se conserva la copia ZIP de baja memoria.
 
 Los sufijos TX mensuales se conservan como parte del encabezado; no se equipara
 la columna con _1 a la columna sin sufijo. No se asignan meses hasta confirmar
