@@ -81,6 +81,16 @@ no escribe ESTATUS, TX, Access, observaciones ni fechas de pago.
 
 Fuera de alcance: mapeo temporal TX y reglas de distribución no confirmadas.
 
+La revisión manual consta de tres controles sobre `__ORIGEN=VENTAS_NUEVAS`:
+seriales repetidos (con históricas solo como referencia), serial operativo vs
+todos los candidatos R34 y Tesoro no Jornada. Las decisiones usan `__ROW_ID` y
+una firma de la evidencia para invalidarse si cambia el conflicto. Los tests
+de `test_revision_manual.py` comprueban eliminación, observación DESINSTALADO,
+elección de serial, recálculo de Jornada, persistencia de sesión simulada,
+bloqueo de descarga y exportación efectiva sin alterar el orden del maestro.
+Las advertencias históricas no bloquean estos controles. No se modifica el
+exportador de baja memoria ni se duplican tarifas en la interfaz.
+
 Los sufijos TX mensuales se conservan como parte del encabezado; no se equipara
 la columna con _1 a la columna sin sufijo. No se asignan meses hasta confirmar
 el significado de _1. Los archivos de entrada reales se analizan desde sus

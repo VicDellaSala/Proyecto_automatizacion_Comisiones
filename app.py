@@ -2,15 +2,15 @@ import streamlit as st
 
 from procesamiento import (
     procesar_todo,
-    recalcular_comisiones,
     generar_excel_resultado,
     VERSION_PROCESAMIENTO,
 )
 
 from reglas_comisiones import PRECIOS_BASE
+from revision_manual import preparar_descarga
 
 
-VERSION_APP = "4.4-ALIAS-TESORO-OCCIDENTE"
+VERSION_APP = "5.0-REVISION-NUEVAS"
 
 
 st.set_page_config(
@@ -406,6 +406,8 @@ else:
                 "resultados"
             ] = resultados
 
+            st.session_state["revision_nuevas"] = {}
+            st.session_state.pop("excel_final_generado", None)
             st.success(
                 "Procesamiento terminado."
             )
@@ -472,19 +474,6 @@ if "resultados" in st.session_state:
         final
     )
 
-    revision = (
-        int(
-            final[
-                "__REQUIERE_REVISION"
-            ]
-            .fillna(False)
-            .sum()
-        )
-        if "__REQUIERE_REVISION"
-        in final.columns
-        else 0
-    )
-
     a, b, c = st.columns(
         3
     )
@@ -504,9 +493,7 @@ if "resultados" in st.session_state:
         total_final
     )
 
-    d, e, f = st.columns(
-        3
-    )
+    d, e = st.columns(2)
 
     d.metric(
         "Ventas ya existentes",
@@ -516,11 +503,6 @@ if "resultados" in st.session_state:
     e.metric(
         "Ventas excluidas",
         excluidas
-    )
-
-    f.metric(
-        "Revisión manual",
-        revision
     )
 
     st.metric(
@@ -627,299 +609,15 @@ if "resultados" in st.session_state:
     st.divider()
 
 
-    # =====================================================
-    # 6. REVISIÓN MANUAL
-    # =====================================================
-
-    st.subheader(
-        "6. Revisión manual"
-    )
-
-    problemas = final[
-        final[
-            "__REQUIERE_REVISION"
-        ].fillna(False)
-    ].copy()
-
-    if problemas.empty:
-        st.success(
-            "No hay filas pendientes "
-            "de revisión manual."
-        )
-
-    else:
-        st.write(
-            "Solo aparecen filas pendientes "
-            "que el programa no pudo resolver "
-            "de forma segura."
-        )
-
-        st.write(
-            "Puedes modificar sus celdas "
-            "o marcar una fila para eliminarla."
-        )
-
-        problemas.insert(
-            0,
-            "Eliminar",
-            False
-        )
-
-        columnas_visibles = [
-            "Eliminar"
-        ]
-
-        # No mostramos columnas internas,
-        # salvo el ID y el motivo de revisión.
-        for columna in final.columns:
-            if not str(
-                columna
-            ).startswith("__"):
-                columnas_visibles.append(
-                    columna
-                )
-
-        if "__MOTIVO_REVISION" in problemas.columns:
-            columnas_visibles.append(
-                "__MOTIVO_REVISION"
-            )
-
-        if "__ROW_ID" in problemas.columns:
-            columnas_visibles.append(
-                "__ROW_ID"
-            )
-
-        columnas_visibles = list(
-            dict.fromkeys(
-                columna
-                for columna in columnas_visibles
-                if columna in problemas.columns
-            )
-        )
-
-        columnas_bloqueadas = [
-            columna
-            for columna in [
-                "__ROW_ID",
-                "__MOTIVO_REVISION",
-            ]
-            if columna in columnas_visibles
-        ]
-
-        tabla_revision = problemas[
-            columnas_visibles
-        ].copy()
-
-        for columna in tabla_revision.columns:
-
-            if columna == "Eliminar":
-                continue
-
-            if columna == "__ROW_ID":
-                continue
-
-            tabla_revision[
-                columna
-            ] = (
-                tabla_revision[
-                    columna
-                ]
-                .astype("string")
-                .fillna("")
-            )
-
-
-        editado = st.data_editor(
-            tabla_revision,
-            hide_index=True,
-            use_container_width=True,
-            num_rows="fixed",
-            disabled=
-                columnas_bloqueadas,
-
-            column_config={
-                "Eliminar":
-                    st.column_config.CheckboxColumn(
-                        "Eliminar",
-                        default=False,
-                    ),
-
-                "__ROW_ID":
-                    st.column_config.NumberColumn(
-                        "ID interno"
-                    ),
-
-                "__MOTIVO_REVISION":
-                    st.column_config.TextColumn(
-                        "Motivo de revisión"
-                    ),
-            },
-            key="revision_v3",
-        )
-
-        if st.button(
-            "Aplicar correcciones y revalidar",
-            use_container_width=True,
-        ):
-            base = resultados[
-                "final"
-            ].copy()
-
-            if "__ROW_ID" in editado.columns:
-                ids_eliminar = set(
-                    editado.loc[
-                        editado[
-                            "Eliminar"
-                        ] == True,
-                        "__ROW_ID"
-                    ].tolist()
-                )
-
-                if ids_eliminar:
-                    base = base[
-                        ~base[
-                            "__ROW_ID"
-                        ].isin(
-                            ids_eliminar
-                        )
-                    ].copy()
-
-            conservar = editado[
-                editado[
-                    "Eliminar"
-                ] == False
-            ].copy()
-
-            conservar = conservar.drop(
-                columns=[
-                    "Eliminar"
-                ]
-            )
-
-            if (
-                "__ROW_ID"
-                in conservar.columns
-                and "__ROW_ID"
-                in base.columns
-            ):
-                for _, fila in conservar.iterrows():
-                    row_id = fila[
-                        "__ROW_ID"
-                    ]
-
-                    mascara = (
-                        base[
-                            "__ROW_ID"
-                        ]
-                        == row_id
-                    )
-
-                    if not mascara.any():
-                        continue
-
-                    for columna in conservar.columns:
-                        if columna in {
-                            "__ROW_ID",
-                            "__MOTIVO_REVISION",
-                        }:
-                            continue
-
-                        if columna in base.columns:
-                            base.loc[
-                                mascara,
-                                columna
-                            ] = fila[
-                                columna
-                            ]
-
-            recalculado = recalcular_comisiones(
-                base,
-                resultados[
-                    "r34"
-                ],
-                resultados[
-                    "afiliados_access"
-                ],
-                mes_r34=
-                    resultados[
-                        "mes_r34"
-                    ],
-                precios=st.session_state["precios"],
-            )
-
-            resultados[
-                "final"
-            ] = recalculado
-
-            st.session_state.pop("excel_final_generado", None)
-
-            st.session_state[
-                "resultados"
-            ] = resultados
-
-            st.success(
-                "Correcciones aplicadas."
-            )
-
-            st.rerun()
-
-
-    st.divider()
-
-
-    # =====================================================
-    # 7. VISTA PREVIA
-    # =====================================================
-
-    st.subheader(
-        "7. Archivo de Comisiones resultante"
-    )
-
-    columnas_publicas = [
-        columna
-        for columna in final.columns
-        if not str(
-            columna
-        ).startswith("__")
-    ]
-
-    vista_previa = final[
-        columnas_publicas
-    ].head(
-        200
-    ).copy()
-
-    for columna in vista_previa.columns:
-
-        vista_previa[
-            columna
-        ] = (
-            vista_previa[
-                columna
-            ]
-            .astype("string")
-            .fillna("")
-        )
-
-
-    st.dataframe(
-        vista_previa,
-        hide_index=True,
-        use_container_width=True,
-    )
-
-    st.caption(
-        "Vista previa de las primeras "
-        "200 filas. El Excel descargado "
-        "conserva el libro original."
-    )
+    from revision_ui import mostrar_revision
+    pendientes_manuales = mostrar_revision(resultados, st.session_state["precios"])
 
 # =====================================================
 # 8. PREPARAR Y DESCARGAR EXCEL
 # =====================================================
 
 st.subheader(
-    "8. Descargar archivo final"
+    "GENERAR / DESCARGAR EXCEL FINAL"
 )
 
 st.info(
@@ -928,10 +626,18 @@ st.info(
 )
 
 
+if "resultados" not in st.session_state:
+    st.stop()
+
+if pendientes_manuales:
+    st.session_state.pop("excel_final_generado", None)
+    st.warning("Debes completar las revisiones manuales pendientes de las ventas nuevas antes de generar el Excel.")
+    st.stop()
+
 if "excel_final_generado" not in st.session_state:
 
     if st.button(
-        "Preparar archivo para descargar",
+        "Generar Excel final",
         type="primary",
         use_container_width=True,
     ):
@@ -942,6 +648,9 @@ if "excel_final_generado" not in st.session_state:
                 "Preparando el archivo de Comisiones..."
             ):
 
+                resultados = preparar_descarga(resultados, st.session_state.get("revision_nuevas", {}),
+                                                precios=st.session_state["precios"])
+                st.session_state["resultados"] = resultados
                 excel_final = generar_excel_resultado(
                     resultados
                 )
