@@ -80,6 +80,7 @@ class IntegracionObservacionTests(unittest.TestCase):
     def base(self):
         base = p.preparar_comisiones(maestro_ficticio())
         base.loc[0, 'OBSERVACION'] = None
+        base['__ORIGEN'] = 'VENTAS_NUEVAS'
         base['OBSERVACION.1'] = 'Nota CXC ficticia'
         base.attrs['encabezados_comisiones']['OBSERVACION.1'] = 'OBSERVACION'
         return base
@@ -91,7 +92,7 @@ class IntegracionObservacionTests(unittest.TestCase):
         casos = [(1500, {'222'}, 'POR PAGAR', 'Aplica Pago'),
                  (1500, set(), 'NO POSEE REGISTRO DE OPERADORES ACCESS COMERCES', 'Pendiente'),
                  (1, {'222'}, 'NO CUMPLE EL CRITERIO DE PAGO', 'Pendiente'),
-                 (None, {'222'}, None, 'Pendiente')]
+                 (None, {'222'}, 'N/A - MONTO TX VACIO', 'Pendiente')]
         for monto, access, observacion, estatus in casos:
             with self.subTest(monto=monto, access=access):
                 base = self.base()
@@ -107,6 +108,7 @@ class IntegracionObservacionTests(unittest.TestCase):
     def test_notas_historicas_no_se_reemplazan_incluso_con_na_nd(self):
         for monto, serial in [(1500, 'PRINCIPAL'), (1, 'PRINCIPAL'), (None, 'N/D')]:
             base = self.base()
+            base['__ORIGEN'] = 'COMISIONES'
             base.loc[0, 'OBSERVACION'] = '  Nota histórica ficticia  '
             final = p.recalcular_comisiones(base, self.r34(monto, serial), {'222'})
             self.assertEqual(final.loc[0, 'OBSERVACION'], '  Nota histórica ficticia  ')
@@ -171,6 +173,7 @@ class IntegracionObservacionTests(unittest.TestCase):
         archivo = maestro_ficticio()
         base = p.preparar_comisiones(archivo)
         base.loc[0, 'OBSERVACION'] = None
+        base['__ORIGEN'] = 'VENTAS_NUEVAS'
         final = p.recalcular_comisiones(base, self.r34(), {'222'})
         salida = p.generar_excel_resultado({'final': final, 'bytes_comisiones_original': archivo.getvalue(),
                                            'hoja_comisiones': 'VENTAS', 'cantidad_original': 1})

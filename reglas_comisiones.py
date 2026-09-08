@@ -465,9 +465,15 @@ def aplicar_motor_comisiones(df, precios=None):
         vacios = all(_texto(fila[destinos[k]]) == '' for k in montos)
         pin_recalculable = (estandarizar_equipo(_texto(datos['equipo'])) == 'Pinpagos'
                             and (fila.get('__ORIGEN') == 'VENTAS_NUEVAS'
-                                 or normalizar_texto(_texto(fila.get('ESTATUS'))) == 'PENDIENTE'))
-        if (vacios or pin_recalculable) and not avisos:
+                                 or normalizar_texto(_texto(fila.get('ESTATUS'))) == 'PENDIENTE'
+                                 or fila.get('__APLICA_PAGO_CALCULADO') == 'SI')
+                            and normalizar_texto(_texto(fila.get('ESTATUS'))) not in {'PAGADO', 'DESINSTALADO'})
+        completar = vacios and normalizar_texto(_texto(fila.get('ESTATUS'))) not in {'PAGADO', 'DESINSTALADO'}
+        if (completar or pin_recalculable) and not avisos:
             for k, c in destinos.items():
+                if (fila.get('__ORIGEN') == 'COMISIONES' and k.startswith('vendedor_')
+                        and _beneficiario(fila[c])):
+                    continue  # Conservar literalmente beneficiarios históricos existentes.
                 resultado.at[idx, c] = r[k]
             diferencia = r['diferencia']
         elif pin_recalculable and r['monto_total'] == 15 and avisos:

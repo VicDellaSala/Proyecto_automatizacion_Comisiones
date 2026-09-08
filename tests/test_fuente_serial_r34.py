@@ -31,9 +31,7 @@ class FuenteSerialTests(unittest.TestCase):
             self.assertEqual(serial_r34_para_equipo(registro,'Castle Dynamo'),'')
             r=resultados(('A','123456789012'))
             r['r34']=pd.DataFrame([dict(registro,__CONCATENAR='1011')])
-            caso=incidencias(r['final'],r['r34'])[2][0]
-            self.assertTrue(caso['sin_fuente_confiable'])
-            self.assertEqual(caso['opciones'],())
+            self.assertFalse(incidencias(r['final'],r['r34'])[2])
 
     def test_csv_textual_preserva_evidencia_y_comparte_resultado(self):
         csv=('PERTENENCIA;AFIPOS;SERIAL;TERMINAL;MONTO_TRANS_BS_ACUM_MES;MES_PROCESO;ANO_PROCESO\n'

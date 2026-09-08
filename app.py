@@ -11,7 +11,7 @@ from reglas_comisiones import PRECIOS_BASE
 from revision_manual import preparar_descarga
 
 
-VERSION_APP = "5.6-VALIDACION-INTEGRAL"
+VERSION_APP = "5.7-CORRECCION-REGRESIONES"
 
 
 st.set_page_config(

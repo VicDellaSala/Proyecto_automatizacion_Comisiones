@@ -20,7 +20,7 @@ from tx_mensual import (numero_tx, preparar_periodos_ventas, unir_historial_vent
                         periodo_fila, registro_periodo, aplicar_historial, estado_historial,
                         validar_periodo_r34, PeriodoR34Requerido)
 
-VERSION_PROCESAMIENTO = "5.6-VALIDACION-INTEGRAL"
+VERSION_PROCESAMIENTO = "5.7-CORRECCION-REGRESIONES"
 
 
 HOJA_COMISIONES = "VENTAS"
@@ -225,6 +225,7 @@ ALIASES = {
     ],
 
     "access": [
+        "REGISTRO DE OPERADORES",
         "REGISTROS DE OPERADORES ACCESS",
         "REGISTRO DE OPERADORES ACCESS",
         "REGISTRO DE OPERADORES ACCESS COMERCES",
@@ -2099,6 +2100,8 @@ def actualizar_observaciones(resultado, lookup, filas_evaluadas):
 
     for idx in filas_evaluadas:
         fila = resultado.loc[idx]
+        if fila.get('__ORIGEN') == 'COMISIONES':
+            continue  # Una carga mensual no autoriza reescribir notas históricas.
         registro = registro_periodo(lookup, fila) or {}
         tx = fila.get("__ESTADO_TX_CALCULADO") or estado_historial(fila, registro.get("__MONTO_TX"))
         serial_r34 = serial_r34_para_equipo(registro, fila['__EQUIPO_STD'])
@@ -2350,8 +2353,9 @@ def recalcular_comisiones(
         # comienza con Estatus pendiente.
         # No reabrimos PAGADO ni DESINSTALADO.
         es_pendiente = (
-            estatus == "PENDIENTE"
-            or fila.get("__ORIGEN") == "VENTAS_NUEVAS"
+            estatus not in {'PAGADO', 'DESINSTALADO'}
+            and (estatus == "PENDIENTE"
+                 or fila.get("__ORIGEN") == "VENTAS_NUEVAS")
         )
 
         if es_pendiente or (estatus == "APLICA PAGO" and observacion_en_validacion.loc[idx]):
@@ -2554,8 +2558,6 @@ def recalcular_comisiones(
 
         if (
             aplica
-            and not periodo_fila(fila)
-            and '__MES_REPORTE' not in resultado and '__MES_R34' not in r34
             and col_estatus
         ):
             resultado.loc[

@@ -28,31 +28,29 @@ def resultados(seriales=('A', 'B'), origenes=('COMISIONES', 'VENTAS_NUEVAS')):
             'mes_r34': None, 'cantidad_original': origenes.count('COMISIONES')}
 
 
+def resultados_duplicados(*args):
+    """Fixture de duplicados dentro de la misma identidad, según regla Paso 1."""
+    r = resultados(*args)
+    d = r['final']
+    seriales = d['SERIAL'].map(normalizar_serial)
+    for serial in seriales.unique():
+        mascara = seriales.eq(serial)
+        if mascara.sum() > 1:
+            d.loc[mascara, 'CONCATENAR'] = '1011'
+            d.loc[mascara, 'AFILIADO'] = '101'
+    return r
+
+
 class RevisionTests(unittest.TestCase):
-    def test_serial_historico_otro_periodo_solo_modifica_identificador(self):
-        from unittest.mock import patch
-        for estatus in ['PENDIENTE', 'PAGADO']:
+    def test_historico_no_se_reabre_por_r34_posterior(self):
+        for estatus in ['PENDIENTE', 'PAGADO', 'DESINSTALADO']:
             r = resultados(('123456780001','123456780002'))
+            r['final'].loc[0,'ESTATUS'] = estatus
             r['final']['__MES_REPORTE'] = 8
             r['final']['__ANO_REPORTE'] = 2026
-            r['final'].loc[0, 'ESTATUS'] = estatus
-            r['final']['MONTO TX AGOSTO'] = 1500
-            r['final']['MONTO TX SEPTIEMBRE'] = 0
-            r['r34'] = pd.DataFrame([{'__CONCATENAR':'1001', '__SERIAL_R34':'1.23457E+11',
-                'TERMINAL':'000123456789012 [001] EQUIPO', '__ANO_R34':2026, '__MES_R34':9}])
-            original = r['final'].copy(deep=True)
-            caso = incidencias(original,r['r34'])[2][0]
-            self.assertEqual(caso['origen'], 'COMISIONES')
-            self.assertEqual(caso['periodo_venta'], (2026,8))
-            self.assertEqual(caso['evidencia'], (('123456789012',(2026,9),'TERMINAL'),))
-            with patch('revision_manual.recalcular_comisiones', side_effect=AssertionError('No recalcular')):
-                mantener, _ = aplicar_decision(r,{},2,1000,'comisiones')
-                pd.testing.assert_frame_equal(mantener['final'],original)
-                nuevo, estado = aplicar_decision(r,{},2,1000,'r34',serial='123456789012')
-                nuevo = preparar_descarga(nuevo,estado)
-            self.assertEqual(nuevo['final'].at[0,'SERIAL'],'123456789012')
-            pd.testing.assert_frame_equal(nuevo['final'].drop(columns=['SERIAL','__SERIAL_COMISION']),original.drop(columns='SERIAL'))
-            self.assertFalse(incidencias(nuevo['final'],r['r34'],estado['decisiones'])[2])
+            r['r34'] = pd.DataFrame([{'__CONCATENAR':'1001',
+                '__SERIAL_R34':'123456789012','__ANO_R34':2026,'__MES_R34':9}])
+            self.assertFalse(incidencias(r['final'],r['r34'])[2])
 
     def test_fuente_serial_exacta_y_firma_incluye_periodo(self):
         r = resultados(('A','B'))
@@ -89,7 +87,7 @@ class RevisionTests(unittest.TestCase):
             self.assertFalse(incidencias(r['final'],r['r34'])[2])
 
     def test_defaults_no_modifican_ni_bloquean(self):
-        r=resultados(('A','A'));r['final']['BANCO']='TESORO'
+        r=resultados_duplicados(('A','A'));r['final']['BANCO']='TESORO'
         r['r34']=pd.DataFrame({'__CONCATENAR':['1011'],'__SERIAL_R34':['Z']})
         self.assertTrue(all(incidencias(r['final'],r['r34']).values()))
         pd.testing.assert_frame_equal(preparar_descarga(r,{})['final'],r['final'])
@@ -98,7 +96,7 @@ class RevisionTests(unittest.TestCase):
         from openpyxl.styles import Border, Side
         from revision_manual import tabla_comisiones
         for elegido in [1000,1001]:
-            r=resultados(('A','A'));original=r['final'].copy()
+            r=resultados_duplicados(('A','A'));original=r['final'].copy()
             n,estado=aplicar_decision(r,{},1,1001,'desinstalado',fila_elegida=elegido)
             self.assertEqual(n['final'].loc[n['final']['__ROW_ID'].eq(elegido),'OBSERVACION'].item(),'DESINSTALADO')
             self.assertEqual(n['final'].loc[n['final']['__ROW_ID'].ne(elegido),'OBSERVACION'].item(),'')
@@ -120,7 +118,7 @@ class RevisionTests(unittest.TestCase):
                 self.assertEqual(c.number_format,'0.00')
 
     def test_eliminar_historica_preserva_fila_superviviente(self):
-        r=resultados(('A','B','A'),('COMISIONES','COMISIONES','VENTAS_NUEVAS'))
+        r=resultados_duplicados(('A','B','A'),('COMISIONES','COMISIONES','VENTAS_NUEVAS'))
         original=r['final'].copy();n,estado=aplicar_decision(r,{},1,1002,'eliminar',fila_elegida=1000)
         cols=[c for c in original if not c.startswith('__')]
         wb=Workbook();ws=wb.active;ws.title='VENTAS';ws.append(cols)
@@ -142,7 +140,7 @@ class RevisionTests(unittest.TestCase):
             (('A','a '), ('COMISIONES','VENTAS_NUEVAS'), 1),
             (('A','A'), ('VENTAS_NUEVAS','VENTAS_NUEVAS'), 2),
             (('A','B'), ('COMISIONES','VENTAS_NUEVAS'), 0)]:
-            r = resultados(seriales, origenes)
+            r = resultados_duplicados(seriales, origenes)
             casos = incidencias(r['final'], r['r34'])
             self.assertEqual(len(casos[1]), cantidad)
             if cantidad:
@@ -150,7 +148,7 @@ class RevisionTests(unittest.TestCase):
 
     def test_acciones_duplicado_e_historica_protegida(self):
         for accion in ['eliminar', 'desinstalado', 'mantener']:
-            r = resultados(('A', 'A')); historica = r['final'].iloc[:1].copy()
+            r = resultados_duplicados(('A', 'A')); historica = r['final'].iloc[:1].copy()
             with self.assertRaises(ValueError):
                 aplicar_decision(r, {}, 1, 1000, accion)
             nuevo, estado = aplicar_decision(r, {}, 1, 1001, accion)
@@ -164,26 +162,21 @@ class RevisionTests(unittest.TestCase):
 
     def test_r34_historico_igual_distinto_y_ambiguo(self):
         r = resultados()
-        r['r34'] = pd.DataFrame({'__CONCATENAR': ['1001','1011','1011'],
-                                '__SERIAL_R34': ['X','B','C']})
-        casos = incidencias(r['final'], r['r34'])
-        self.assertEqual(len(casos[2]), 2)
-        self.assertEqual(next(c for c in casos[2] if c['row_id']==1001)['opciones'], ('B','C'))
-        with self.assertRaises(ValueError):
-            aplicar_decision(r, {}, 2, 1001, 'r34')
-        n, estado = aplicar_decision(r, {}, 2, 1001, 'comisiones')
-        self.assertEqual(n['final'].iloc[1]['SERIAL'], 'B')
-        self.assertEqual([c['row_id'] for c in incidencias(n['final'], n['r34'], estado['decisiones'])[2]], [1000])
-        n, estado = aplicar_decision(r, {}, 2, 1001, 'r34', serial='C')
-        self.assertEqual(n['final'].iloc[1]['SERIAL'], 'C')
-        self.assertEqual(n['final'].iloc[1]['__SERIAL_COMISION'], 'C')
-        self.assertEqual(n['final'].iloc[1]['CONCATENAR'], '1011')
-        self.assertEqual([c['row_id'] for c in incidencias(n['final'], n['r34'], estado['decisiones'])[2]], [1000])
-        r['r34'] = r['r34'].iloc[:2]
-        self.assertEqual([c['row_id'] for c in incidencias(r['final'], r['r34'])[2]], [1000])
+        r['r34'] = pd.DataFrame({'__CONCATENAR':['1001','1011','1011'],
+                                '__SERIAL_R34':['X','B','C']})
+        self.assertFalse(incidencias(r['final'],r['r34'])[2])
+        # Solo evidencia inequívoca diferente de la nueva fila habilita decisión.
+        r['r34'] = r['r34'].iloc[[0,2]]
+        self.assertEqual([c['row_id'] for c in incidencias(r['final'],r['r34'])[2]], [1001])
+        n, estado = aplicar_decision(r,{},2,1001,'r34',serial='C')
+        self.assertEqual(n['final'].iloc[1]['SERIAL'],'C')
+        self.assertEqual(n['final'].iloc[1]['__SERIAL_COMISION'],'C')
+        self.assertFalse(incidencias(n['final'],n['r34'],estado['decisiones'])[2])
 
     def test_serial_elegido_reabre_paso_uno(self):
         r = resultados()
+        r['final']['CONCATENAR'] = '1011'
+        r['final']['AFILIADO'] = '101'
         r['r34'] = pd.DataFrame({'__CONCATENAR': ['1011'], '__SERIAL_R34': ['A']})
         n, estado = aplicar_decision(r, {}, 2, 1001, 'r34', serial='A')
         self.assertEqual(len(incidencias(n['final'], n['r34'], estado['decisiones'])[1]), 1)
@@ -211,18 +204,18 @@ class RevisionTests(unittest.TestCase):
         self.assertFalse(incidencias(n['final'], n['r34'])[3])
 
     def test_historicos_no_bloquean_ni_indices_definen_origen(self):
-        r = resultados(('A','A'), ('COMISIONES','COMISIONES'))
+        r = resultados_duplicados(('A','A'), ('COMISIONES','COMISIONES'))
         r['final']['BANCO'] = 'TESORO'
         r['final']['__REQUIERE_REVISION'] = True
         r['r34'] = pd.DataFrame({'__CONCATENAR': ['1001'], '__SERIAL_R34': ['X']})
         preparar_descarga(r, {})
-        r = resultados(('A','A'))
+        r = resultados_duplicados(('A','A'))
         r['final'].index = [400, 900]
         n, estado = aplicar_decision(r, {}, 1, 1001, 'eliminar')
         self.assertEqual(list(n['final'].index), [400])
 
     def test_decisiones_llegan_a_xlsx_en_orden(self):
-        r = resultados(('A','A','C','D'), ('COMISIONES',)+('VENTAS_NUEVAS',)*3)
+        r = resultados_duplicados(('A','A','C','D'), ('COMISIONES',)+('VENTAS_NUEVAS',)*3)
         original = r['final'].copy()
         r['final'].loc[2, 'BANCO'] = 'TESORO'
         r['r34'] = pd.DataFrame({'__CONCATENAR': ['1031'], '__SERIAL_R34': ['Z']})
@@ -246,7 +239,7 @@ class RevisionTests(unittest.TestCase):
         self.assertEqual(salida['OTRA']['A1'].value, 'Conservar')
 
     def test_desinstalado_sobrevive_revalidacion_y_exportacion(self):
-        r = resultados(('A','A'))
+        r = resultados_duplicados(('A','A'))
         r['r34'] = pd.DataFrame({'__CONCATENAR': ['1011'], '__SERIAL_R34': ['Z']})
         n, estado = aplicar_decision(r, {}, 1, 1001, 'desinstalado')
         n, estado = aplicar_decision(n, estado, 2, 1001, 'r34', serial='Z')
@@ -262,8 +255,10 @@ class RevisionTests(unittest.TestCase):
         self.assertEqual(ws.cell(3,cols.index('SERIAL')+1).value,'Z')
 
     def test_decision_no_cubre_un_conflicto_diferente(self):
-        r = resultados(('A','A','B'), ('COMISIONES','VENTAS_NUEVAS','VENTAS_NUEVAS'))
-        r['r34'] = pd.DataFrame({'__CONCATENAR': ['1021'], '__SERIAL_R34': ['A']})
+        r = resultados_duplicados(('A','A','B'), ('COMISIONES','VENTAS_NUEVAS','VENTAS_NUEVAS'))
+        r['final']['CONCATENAR'] = '1011'
+        r['final']['AFILIADO'] = '101'
+        r['r34'] = pd.DataFrame({'__CONCATENAR': ['1011'], '__SERIAL_R34': ['A']})
         n, estado = aplicar_decision(r, {}, 1, 1001, 'mantener')
         n, estado = aplicar_decision(n, estado, 2, 1002, 'r34', serial='A')
         self.assertEqual(len(incidencias(n['final'],n['r34'],estado['decisiones'])[1]),2)
@@ -279,7 +274,7 @@ class RevisionTests(unittest.TestCase):
         fake.selectbox.side_effect = ['Marcar como DESINSTALADO',1001]
         fake.button.return_value = True
         fake.rerun.side_effect = RuntimeError('rerun')
-        r=resultados(('A','A'));fake.session_state['resultados']=r
+        r=resultados_duplicados(('A','A'));fake.session_state['resultados']=r
         spec=importlib.util.spec_from_file_location('ui_prueba',Path(__file__).parents[1]/'revision_ui.py')
         with patch.dict(sys.modules,{'streamlit':fake}):
             ui=importlib.util.module_from_spec(spec);spec.loader.exec_module(ui)

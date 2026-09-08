@@ -199,9 +199,7 @@ class TxMensualTests(unittest.TestCase):
         r=resultados(('A','PRINCIPAL'));b=r['final'];b['__MES_REPORTE']=9;b['__ANO_REPORTE']=2026
         r34=pd.concat([self.r34(1500,8,'DIFERENTE'),self.r34(500,9)],ignore_index=True)
         r34['__CONCATENAR']='1011'
-        caso = incidencias(b,r34)[2][0]
-        self.assertEqual(caso['periodo_venta'], (2026,9))
-        self.assertEqual(set(caso['opciones']), {'DIFERENTE','PRINCIPAL'})
+        self.assertFalse(incidencias(b,r34)[2])  # Alternativas no prueban un cambio real.
         r34.loc[r34['__MES_R34'].eq(8),'__ES_HISTORIAL_TX'] = True
         self.assertFalse(incidencias(b,r34)[2])
         r34.loc[r34['__MES_R34'].eq(9),'__SERIAL_R34']='OTRO'

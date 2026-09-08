@@ -139,11 +139,17 @@ Jornada Tesoro y el reparto Bancaribe confirmado no requieren Access para pago.
 La presencia real en Access sigue diagnosticándose sin inventar coincidencias.
 `test_excepciones_pago.py` comprueba las excepciones y los negativos de detección.
 El R34 admite el alias exacto MONTO_TRANS_BS_ACUM_MES_1 para el período anterior.
-# Paso 2: alcance ampliado confirmado
+# Corrección 5.7: alcance y no regresión
 
-La revisión de seriales incluye filas nuevas e históricas y muestra el período
-de venta y de cada evidencia R34, junto con la fuente TERMINAL/SERIAL. Los registros
-sintéticos de TX `_1` no constituyen evidencia de serial. Elegir un serial solo
-actualiza el identificador público y su copia interna: no recalcula comisiones,
-TX, estatus ni observaciones. Los tests cubren históricos PENDIENTE/PAGADO,
-fuentes exactas y cambios de período que reabren una decisión.
+Paso 1 agrupa por CONCATENAR y serial, sin mezclar claves distintas. Paso 2
+solo revisa ventas nuevas con serial actual y una única alternativa confiable
+distinta; no abre históricos ni conflictos por fuentes imprecisas o alternativas
+ambiguas. Conserva período y fuente de la evidencia. Los registros sintéticos
+de TX `_1` no constituyen evidencia de serial. Elegir un serial solo actualiza
+el identificador público y su copia interna, sin recalcular otros campos.
+
+Se restaura Aplica Pago y la fecha dinámica cuando se cumple el criterio, aun
+con períodos R34/reporte. PAGADO y DESINSTALADO se preservan. La carga mensual
+no escribe observaciones históricas. Las pruebas de exportación comprueban que
+solo se agrega la columna TX necesaria, sin AFILIADO/Access adicionales ni
+campos internos, conservando hojas, fórmulas y distribuciones históricas válidas.

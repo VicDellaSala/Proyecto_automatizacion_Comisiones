@@ -1,4 +1,4 @@
-"""Revisión por IDs; Paso 2 incluye históricos y evidencia de otros períodos."""
+"""Controles de ventas nuevas, separados por identidad y evidencia confiable."""
 from tx_mensual import periodo_fila, validar_periodo_r34
 from copy import deepcopy
 from itertools import repeat
@@ -34,13 +34,14 @@ def incidencias(df, r34, decisiones=None):
     decisiones = decisiones or {}
     identidad = resolver_identidad_comisiones(df)
     seriales = df[identidad['serial']].map(normalizar_serial)
+    claves = df[identidad['concatenar']].map(normalizar_serial)
     nuevas = df['__ORIGEN'].eq('VENTAS_NUEVAS')
     grupos = {}
     for idx, serial in seriales.items():
-        if serial:
-            grupos.setdefault(serial, []).append(df.at[idx, '__ROW_ID'])
+        if serial and claves.at[idx]:
+            grupos.setdefault((claves.at[idx], serial), []).append(df.at[idx, '__ROW_ID'])
     candidatos = {}
-    claves_revision = set(df[identidad['concatenar']].map(normalizar_serial))
+    claves_revision = set(claves.loc[nuevas])
     if not r34.empty:
         terminales = r34['__SERIAL_TERMINAL_R34'] if '__SERIAL_TERMINAL_R34' in r34 else repeat('')
         for clave, serial, terminal, terminal_original, serial_original, ano, mes, historia in zip(r34['__CONCATENAR'], r34['__SERIAL_R34'],
@@ -73,11 +74,11 @@ def incidencias(df, r34, decisiones=None):
         if decisiones.get((paso, row_id)) != firma:
             casos[paso].append(dict(row_id=row_id, firma=firma, **datos))
 
-    for idx, fila in df.iterrows():
+    for idx, fila in df.loc[nuevas].iterrows():
         row_id, serial = fila['__ROW_ID'], seriales.at[idx]
-        relacionados = grupos.get(serial, [])
+        relacionados = grupos.get((claves.at[idx], serial), [])
         if nuevas.at[idx] and serial and len(relacionados) > 1:
-            agregar(1, row_id, (serial, tuple(relacionados)), relacionados=relacionados)
+            agregar(1, row_id, (claves.at[idx], serial, tuple(relacionados)), relacionados=relacionados)
         clave = normalizar_serial(fila[identidad['concatenar']])
         periodo = periodo_fila(fila)
         opciones = set()
@@ -87,7 +88,9 @@ def incidencias(df, r34, decisiones=None):
                 opciones.add(normalizado)
         opciones = tuple(sorted(opciones))
         sin_fuente = any(not valor for valor, _, _ in evidencia)
-        if sin_fuente or (opciones and (len(opciones) > 1 or serial not in opciones)):
+        # Una fuente ausente/imprecisa o candidatos alternativos no prueban
+        # sustitución de identidad. Los históricos no se reabren por esta carga.
+        if serial and len(opciones) == 1 and serial not in opciones:
             agregar(2, row_id, (clave, serial, evidencia), serial=serial, opciones=opciones,
                     sin_fuente_confiable=sin_fuente, periodo_venta=periodo,
                     evidencia=evidencia, origen=fila['__ORIGEN'])
