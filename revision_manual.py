@@ -1,11 +1,13 @@
-"""Tres controles de ventas nuevas, con decisiones ligadas a IDs y evidencia."""
+"""Revisión por IDs; Paso 2 incluye históricos y evidencia de otros períodos."""
+from tx_mensual import periodo_fila, validar_periodo_r34
 from copy import deepcopy
 from itertools import repeat
 
 import pandas as pd
 
 from procesamiento import (resolver_identidad_comisiones, normalizar_identificador,
-    columna_observacion_comisiones, columnas_publicas_comisiones, recalcular_comisiones, serial_r34_para_equipo)
+    columna_observacion_comisiones, columnas_publicas_comisiones, recalcular_comisiones, serial_r34_para_equipo,
+    extraer_serial_terminal_r34)
 from reglas_comisiones import normalizar_texto, identificar_jornada, estandarizar_equipo, validar_cuadre
 
 
@@ -38,20 +40,31 @@ def incidencias(df, r34, decisiones=None):
         if serial:
             grupos.setdefault(serial, []).append(df.at[idx, '__ROW_ID'])
     candidatos = {}
-    claves_nuevas = set(df.loc[nuevas, identidad['concatenar']].map(normalizar_serial))
+    claves_revision = set(df[identidad['concatenar']].map(normalizar_serial))
     if not r34.empty:
         terminales = r34['__SERIAL_TERMINAL_R34'] if '__SERIAL_TERMINAL_R34' in r34 else repeat('')
-        for clave, serial, terminal, terminal_original, serial_original in zip(r34['__CONCATENAR'], r34['__SERIAL_R34'],
+        for clave, serial, terminal, terminal_original, serial_original, ano, mes, historia in zip(r34['__CONCATENAR'], r34['__SERIAL_R34'],
                 terminales, r34['TERMINAL'] if 'TERMINAL' in r34 else repeat(''),
-                r34['__SERIAL_R34_ORIGINAL'] if '__SERIAL_R34_ORIGINAL' in r34 else repeat(None)):
+                r34['__SERIAL_R34_ORIGINAL'] if '__SERIAL_R34_ORIGINAL' in r34 else repeat(None),
+                r34['__ANO_R34'] if '__ANO_R34' in r34 else repeat(None),
+                r34['__MES_R34'] if '__MES_R34' in r34 else repeat(None),
+                r34['__ES_HISTORIAL_TX'] if '__ES_HISTORIAL_TX' in r34 else repeat(False)):
+            if pd.notna(historia) and bool(historia):
+                continue
             clave = normalizar_serial(clave)
-            if clave and clave in claves_nuevas:
+            if clave and clave in claves_revision:
                 registro = {'__SERIAL_R34': serial, '__SERIAL_TERMINAL_R34': terminal}
                 if 'TERMINAL' in r34:
                     registro['TERMINAL'] = terminal_original
                 if '__SERIAL_R34_ORIGINAL' in r34:
                     registro['__SERIAL_R34_ORIGINAL'] = serial_original
-                candidatos.setdefault(clave, set()).add(serial_r34_para_equipo(registro, None))
+                periodo = validar_periodo_r34(ano, mes)
+                valor = serial_r34_para_equipo(registro, None)
+                prefijo = extraer_serial_terminal_r34(terminal_original)
+                if 'TERMINAL' not in r34:
+                    prefijo = serial_r34_para_equipo({'__SERIAL_TERMINAL_R34': terminal}, None)
+                fuente = 'TERMINAL' if valor and prefijo == valor else ('SERIAL' if valor else 'SIN FUENTE CONFIABLE')
+                candidatos.setdefault(clave, set()).add((valor, periodo, fuente))
     banco_col = columna(df, 'BANCO')
     jornada_col = columna(df, 'CANAL DE VENTA (JORNADA QUE PERTENECE)')
     casos = {1: [], 2: [], 3: []}
@@ -60,23 +73,26 @@ def incidencias(df, r34, decisiones=None):
         if decisiones.get((paso, row_id)) != firma:
             casos[paso].append(dict(row_id=row_id, firma=firma, **datos))
 
-    for idx, fila in df.loc[nuevas].iterrows():
+    for idx, fila in df.iterrows():
         row_id, serial = fila['__ROW_ID'], seriales.at[idx]
         relacionados = grupos.get(serial, [])
-        if serial and len(relacionados) > 1:
+        if nuevas.at[idx] and serial and len(relacionados) > 1:
             agregar(1, row_id, (serial, tuple(relacionados)), relacionados=relacionados)
         clave = normalizar_serial(fila[identidad['concatenar']])
+        periodo = periodo_fila(fila)
         opciones = set()
-        for valor in candidatos.get(clave, []):
+        evidencia = tuple(sorted(candidatos.get(clave, []), key=repr))
+        for valor, _, _ in evidencia:
             if normalizado := normalizar_serial(valor):
                 opciones.add(normalizado)
         opciones = tuple(sorted(opciones))
-        sin_fuente = '' in candidatos.get(clave, set())
+        sin_fuente = any(not valor for valor, _, _ in evidencia)
         if sin_fuente or (opciones and (len(opciones) > 1 or serial not in opciones)):
-            agregar(2, row_id, (clave, serial, opciones, sin_fuente), serial=serial, opciones=opciones,
-                    sin_fuente_confiable=sin_fuente)
+            agregar(2, row_id, (clave, serial, evidencia), serial=serial, opciones=opciones,
+                    sin_fuente_confiable=sin_fuente, periodo_venta=periodo,
+                    evidencia=evidencia, origen=fila['__ORIGEN'])
         banco, contexto = fila[banco_col], fila[jornada_col]
-        if normalizar_texto(banco) in {'TESORO', 'BANCO DEL TESORO'} and identificar_jornada(banco, contexto) is not True:
+        if nuevas.at[idx] and normalizar_texto(banco) in {'TESORO', 'BANCO DEL TESORO'} and identificar_jornada(banco, contexto) is not True:
             agregar(3, row_id, (normalizar_texto(banco), normalizar_texto(contexto)))
     return casos
 
@@ -132,6 +148,10 @@ def _revalidar(df, ids, resultados, precios, estado):
                     and valores.map(lambda v: isinstance(v, str) or pd.isna(v)).all()):
                 salida[c] = salida[c].astype(object)
         salida.loc[parte.index, c] = valores
+    if parte.attrs.get('columnas_tx_nuevas'):
+        orden = [c for c in parte.columns if c in salida] + [c for c in salida if c not in parte]
+        salida = salida[orden]
+        salida.attrs.update(parte.attrs)
     obs = columna_observacion_comisiones(salida)
     for row_id, texto in estado.get('observaciones', {}).items():
         m = salida['__ROW_ID'].eq(row_id)
@@ -151,7 +171,7 @@ def aplicar_decision(resultados, estado, paso, row_id, accion, serial=None, prec
     casos = incidencias(df, resultados['r34'], decisiones)
     caso = next((c for c in casos.get(paso, []) if c['row_id'] == row_id), None)
     if caso is None:
-        raise ValueError('El caso ya no está pendiente o no corresponde a una venta nueva.')
+        raise ValueError('El caso ya no está pendiente de revisión.')
     idx = df.index[df['__ROW_ID'].eq(row_id)][0]
     objetivo = row_id
     if paso == 1 and accion in {'eliminar', 'desinstalado'}:
@@ -176,8 +196,11 @@ def aplicar_decision(resultados, estado, paso, row_id, accion, serial=None, prec
             raise ValueError('Selecciona explícitamente un serial disponible en R34.')
         for c in columnas_publicas_comisiones(df, 'serial'):
             df.at[idx, c] = serial
+        if '__SERIAL_COMISION' not in df:
+            df['__SERIAL_COMISION'] = df[resolver_identidad_comisiones(df)['serial']].map(normalizar_serial)
+        df.at[idx, '__SERIAL_COMISION'] = serial
         estado.setdefault('seriales', {})[row_id] = serial
-        df = _revalidar(df, {row_id}, resultados, precios, estado)
+        # Elegir un identificador no autoriza recalcular importes ni históricos.
     elif accion == 'jornada':
         df.at[idx, columna(df, 'CANAL DE VENTA (JORNADA QUE PERTENECE)')] = 'JORNADA BANCO DEL TESORO'
         # El usuario autorizó sustituir el reparto de esta nueva fila. El motor
@@ -194,7 +217,7 @@ def aplicar_decision(resultados, estado, paso, row_id, accion, serial=None, prec
         if pd.isna(df.at[idx, total]) or cuadre['requiere_revision']:
             raise ValueError('El motor no pudo completar un reparto de Jornada válido; la decisión no se aplicó.')
         estado.setdefault('jornadas', set()).add(row_id)
-    if accion in {'r34', 'jornada'}:
+    if accion == 'jornada':
         estado.setdefault('afectadas', set()).add(row_id)
     # Firmar la evidencia posterior: una nueva colisión invalida decisiones viejas.
     posterior = incidencias(df, resultados['r34'])

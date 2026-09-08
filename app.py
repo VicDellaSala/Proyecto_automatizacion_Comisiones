@@ -1,3 +1,4 @@
+from tx_mensual import PeriodoR34Requerido, MESES
 import streamlit as st
 
 from procesamiento import (
@@ -10,7 +11,7 @@ from reglas_comisiones import PRECIOS_BASE
 from revision_manual import preparar_descarga
 
 
-VERSION_APP = "5.4-FREELANCER-Y-ALIAS"
+VERSION_APP = "5.6-VALIDACION-INTEGRAL"
 
 
 st.set_page_config(
@@ -349,6 +350,17 @@ else:
         "Todos los archivos están cargados."
     )
 
+    periodos_manuales = {}
+    for i, fuente in enumerate(st.session_state.get('r34_sin_periodo', [])):
+        st.warning(f'R34 {i + 1}: falta año/mes válido. La selección se aplicará solo a registros sin período.')
+        st.caption(fuente)
+        mes = st.selectbox('Mes del R34', list(range(1, 13)), index=None,
+                           format_func=lambda m: MESES[m - 1], key=f'mes_r34_manual_{i}')
+        ano = st.number_input('Año del R34', min_value=1, max_value=9999,
+                              value=None, step=1, key=f'ano_r34_manual_{i}')
+        if mes is not None and ano is not None:
+            periodos_manuales[fuente] = (int(ano), mes)
+
     if st.button(
         "Iniciar procesamiento",
         type="primary",
@@ -383,6 +395,7 @@ else:
                     chunksize=
                         100_000,
                     precios=st.session_state["precios"],
+                    periodos_r34_manuales=periodos_manuales,
                 )
 
             faltantes = (
@@ -407,11 +420,18 @@ else:
             ] = resultados
 
             st.session_state["revision_nuevas"] = {}
+            st.session_state.pop("r34_sin_periodo", None)
             st.session_state.pop("excel_final_generado", None)
             st.success(
                 "Procesamiento terminado."
             )
 
+        except PeriodoR34Requerido as error:
+            fuentes = error.archivos
+            if st.session_state.get('r34_sin_periodo') != fuentes:
+                st.session_state['r34_sin_periodo'] = fuentes
+                st.rerun()
+            st.warning(str(error))
         except Exception as error:
             st.error(
                 "Ocurrió un error durante "
@@ -435,6 +455,10 @@ if "resultados" in st.session_state:
     final = resultados[
         "final"
     ]
+    periodos_detectados = sorted({tuple(p) for d in resultados.get('detalle_r34', []) for p in d.get('periodos', [])})
+    if periodos_detectados:
+        st.caption('R34 detectado: ' + ', '.join(f'{MESES[mes - 1]} {ano}' for ano, mes in periodos_detectados))
+
 
     st.divider()
 

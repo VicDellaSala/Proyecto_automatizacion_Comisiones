@@ -91,8 +91,8 @@ class AccessTests(unittest.TestCase):
         libro = Workbook()
         hoja = libro.active
         hoja.title = "VENTAS"
-        hoja.append(["AFILIADO", "TERMINAL", "EQUIPO", "ESTATUS", "ACCESS COMMERCE", "CON TX", "FORMULA"])
-        hoja.append([123, 1, "Castle Dynamo", "Pendiente", "SI", "CON_TX", "=1+1"])
+        hoja.append(["AFILIADO", "TERMINAL", "EQUIPO", "ESTATUS", "ACCESS COMMERCE", "CON TX", "FORMULA", "MES DE CIERRE"])
+        hoja.append([123, 1, "Castle Dynamo", "Pendiente", "SI", "CON_TX", "=1+1", "AGOSTO (2026)"])
         libro.create_sheet("OTRA").append(["Conservar", "=2+2"])
         maestro = io.BytesIO()
         libro.save(maestro)
@@ -101,6 +101,7 @@ class AccessTests(unittest.TestCase):
             "AFILIADO": [123, 456, 777, 888, 999],
             "TERMINAL": [1, 1, 0, 1, 1],
             "EQUIPO": ["Castle Dynamo", "Pinpagos", "Castle Dynamo", "SIMCARD", "Zappy S1MINI2"],
+            "FECHA REPORTE": ["2026-08-01"] * 5,
             "PROPIEDAD": ["CREDICARDPOS"] * 4 + ["AGENTE AUTORIZADO"],
         }))
         # El helper escribe Sheet1; Reportes acepta COLOCACIONES.
@@ -109,7 +110,7 @@ class AccessTests(unittest.TestCase):
         ventas = io.BytesIO()
         reporte.save(ventas)
         ventas.name = "ventas.xlsx"
-        r34 = io.BytesIO(b"PERTENENCIA;AFIPOS;MONTO_TRANS_BS_ACUM_MES\nCREDICARDPOS;1231;1\nCREDICARDPOS;4561;1\n")
+        r34 = io.BytesIO(b"PERTENENCIA;AFIPOS;MONTO_TRANS_BS_ACUM_MES;MES_PROCESO;ANO_PROCESO\nCREDICARDPOS;1231;1;8;2026\nCREDICARDPOS;4561;1;8;2026\n")
         r34.name = "r34.csv"
         resultados = p.procesar_todo([r34], [ventas], maestro,
                                     archivo_excel(pd.DataFrame({"AFILIADO": [789]})), chunksize=1)
@@ -118,7 +119,7 @@ class AccessTests(unittest.TestCase):
         self.assertEqual(len(resultados["ventas_existentes"]), 1)
         self.assertEqual(len(resultados["ventas_excluidas"]), 3)
         self.assertEqual(resultados["final"]["__ACCESS_CALCULADO"].tolist(), ["NO", "NO APLICA"])
-        self.assertEqual(resultados["final"]["__ESTADO_TX_CALCULADO"].tolist(), ["C/P SIN TX"] * 2)
+        self.assertEqual(resultados["final"]["__ESTADO_TX_CALCULADO"].tolist(), ["CON_TX", "C/P SIN TX"])
         salida = p.generar_excel_resultado(resultados)
         self.assertEqual(maestro.getvalue(), original)
         with zipfile.ZipFile(io.BytesIO(original)) as antes, zipfile.ZipFile(io.BytesIO(salida)) as despues:

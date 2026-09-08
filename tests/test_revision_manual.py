@@ -29,6 +29,41 @@ def resultados(seriales=('A', 'B'), origenes=('COMISIONES', 'VENTAS_NUEVAS')):
 
 
 class RevisionTests(unittest.TestCase):
+    def test_serial_historico_otro_periodo_solo_modifica_identificador(self):
+        from unittest.mock import patch
+        for estatus in ['PENDIENTE', 'PAGADO']:
+            r = resultados(('123456780001','123456780002'))
+            r['final']['__MES_REPORTE'] = 8
+            r['final']['__ANO_REPORTE'] = 2026
+            r['final'].loc[0, 'ESTATUS'] = estatus
+            r['final']['MONTO TX AGOSTO'] = 1500
+            r['final']['MONTO TX SEPTIEMBRE'] = 0
+            r['r34'] = pd.DataFrame([{'__CONCATENAR':'1001', '__SERIAL_R34':'1.23457E+11',
+                'TERMINAL':'000123456789012 [001] EQUIPO', '__ANO_R34':2026, '__MES_R34':9}])
+            original = r['final'].copy(deep=True)
+            caso = incidencias(original,r['r34'])[2][0]
+            self.assertEqual(caso['origen'], 'COMISIONES')
+            self.assertEqual(caso['periodo_venta'], (2026,8))
+            self.assertEqual(caso['evidencia'], (('123456789012',(2026,9),'TERMINAL'),))
+            with patch('revision_manual.recalcular_comisiones', side_effect=AssertionError('No recalcular')):
+                mantener, _ = aplicar_decision(r,{},2,1000,'comisiones')
+                pd.testing.assert_frame_equal(mantener['final'],original)
+                nuevo, estado = aplicar_decision(r,{},2,1000,'r34',serial='123456789012')
+                nuevo = preparar_descarga(nuevo,estado)
+            self.assertEqual(nuevo['final'].at[0,'SERIAL'],'123456789012')
+            pd.testing.assert_frame_equal(nuevo['final'].drop(columns=['SERIAL','__SERIAL_COMISION']),original.drop(columns='SERIAL'))
+            self.assertFalse(incidencias(nuevo['final'],r['r34'],estado['decisiones'])[2])
+
+    def test_fuente_serial_exacta_y_firma_incluye_periodo(self):
+        r = resultados(('A','B'))
+        r['r34'] = pd.DataFrame([{'__CONCATENAR':'1011','__SERIAL_R34':'123456789012',
+            'TERMINAL':'INVALIDO','__ANO_R34':2026,'__MES_R34':9}])
+        caso = incidencias(r['final'],r['r34'])[2][0]
+        self.assertEqual(caso['evidencia'], (('123456789012',(2026,9),'SERIAL'),))
+        nuevo, estado = aplicar_decision(r,{},2,1001,'comisiones')
+        r['r34']['__MES_R34'] = 10
+        self.assertTrue(incidencias(nuevo['final'],r['r34'],estado['decisiones'])[2])
+
     def test_formato_conserva_prefijos_excel(self):
         from formato_revision import _serializar
         import xml.etree.ElementTree as ET
@@ -132,20 +167,20 @@ class RevisionTests(unittest.TestCase):
         r['r34'] = pd.DataFrame({'__CONCATENAR': ['1001','1011','1011'],
                                 '__SERIAL_R34': ['X','B','C']})
         casos = incidencias(r['final'], r['r34'])
-        self.assertEqual(len(casos[2]), 1)
-        self.assertEqual(casos[2][0]['opciones'], ('B','C'))
+        self.assertEqual(len(casos[2]), 2)
+        self.assertEqual(next(c for c in casos[2] if c['row_id']==1001)['opciones'], ('B','C'))
         with self.assertRaises(ValueError):
             aplicar_decision(r, {}, 2, 1001, 'r34')
         n, estado = aplicar_decision(r, {}, 2, 1001, 'comisiones')
         self.assertEqual(n['final'].iloc[1]['SERIAL'], 'B')
-        self.assertFalse(incidencias(n['final'], n['r34'], estado['decisiones'])[2])
+        self.assertEqual([c['row_id'] for c in incidencias(n['final'], n['r34'], estado['decisiones'])[2]], [1000])
         n, estado = aplicar_decision(r, {}, 2, 1001, 'r34', serial='C')
         self.assertEqual(n['final'].iloc[1]['SERIAL'], 'C')
         self.assertEqual(n['final'].iloc[1]['__SERIAL_COMISION'], 'C')
         self.assertEqual(n['final'].iloc[1]['CONCATENAR'], '1011')
-        self.assertFalse(incidencias(n['final'], n['r34'], estado['decisiones'])[2])
+        self.assertEqual([c['row_id'] for c in incidencias(n['final'], n['r34'], estado['decisiones'])[2]], [1000])
         r['r34'] = r['r34'].iloc[:2]
-        self.assertFalse(incidencias(r['final'], r['r34'])[2])
+        self.assertEqual([c['row_id'] for c in incidencias(r['final'], r['r34'])[2]], [1000])
 
     def test_serial_elegido_reabre_paso_uno(self):
         r = resultados()

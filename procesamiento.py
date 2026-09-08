@@ -15,9 +15,12 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from reglas_comisiones import estandarizar_equipo, aplicar_motor_comisiones
+from reglas_comisiones import estandarizar_equipo, aplicar_motor_comisiones, requiere_access_para_venta
+from tx_mensual import (numero_tx, preparar_periodos_ventas, unir_historial_ventas,
+                        periodo_fila, registro_periodo, aplicar_historial, estado_historial,
+                        validar_periodo_r34, PeriodoR34Requerido)
 
-VERSION_PROCESAMIENTO = "5.2-SERIAL-DESDE-TERMINAL"
+VERSION_PROCESAMIENTO = "5.6-VALIDACION-INTEGRAL"
 
 
 HOJA_COMISIONES = "VENTAS"
@@ -69,6 +72,7 @@ ALIASES = {
 
     "monto_tx": [
         "MONTO_TRANS_BS_ACUM_MES",
+        "Monto_Trans_Acum_bs_mes",
         "MONTO TRANS BS ACUM MES",
         "MONTO_TRANSACCION_BS_ACUM_MES",
         "MONTO TRANSACCION BS ACUM MES",
@@ -688,7 +692,8 @@ def extraer_serial_terminal_r34(valor):
 def procesar_csv_r34(
     stream,
     nombre,
-    chunksize=100_000
+    chunksize=100_000,
+    periodo_manual=None,
 ):
     stream.seek(0)
 
@@ -704,12 +709,15 @@ def procesar_csv_r34(
     columnas = None
     mes_proceso_detectado = None
     ano_proceso_detectado = None
+    periodos_detectados = set()
+    registros_sin_periodo = 0
 
     lector = pd.read_csv(
         stream,
         sep=separador,
         encoding=encoding,
         dtype=str,
+        keep_default_na=False,
         chunksize=chunksize,
         on_bad_lines="skip",
         low_memory=False,
@@ -875,45 +883,36 @@ def procesar_csv_r34(
                 "__SERIAL_TERMINAL_R34"
             ] = ""
 
-        filtrado[
-            "__MONTO_TX"
-        ] = filtrado[
-            columnas["monto_tx"]
-        ].map(
-            normalizar_numero
-        )
+        tx = filtrado[columnas['monto_tx']].map(numero_tx)
+        filtrado['__MONTO_TX'] = tx.map(lambda v: v[0])
+        filtrado['__MOTIVO_MONTO_TX'] = tx.map(lambda v: v[1])
+        for origen, destino in [('mes_proceso', '__MES_R34'), ('ano_proceso', '__ANO_R34')]:
+            filtrado[destino] = pd.to_numeric(filtrado[columnas[origen]], errors='coerce') if columnas[origen] else None
 
-        if (
-            mes_proceso_detectado is None
-            and columnas["mes_proceso"]
-        ):
-            serie = pd.to_numeric(
-                filtrado[
-                    columnas["mes_proceso"]
-                ],
-                errors="coerce"
-            ).dropna()
-
-            if not serie.empty:
-                mes_proceso_detectado = int(
-                    serie.iloc[0]
-                )
-
-        if (
-            ano_proceso_detectado is None
-            and columnas["ano_proceso"]
-        ):
-            serie = pd.to_numeric(
-                filtrado[
-                    columnas["ano_proceso"]
-                ],
-                errors="coerce"
-            ).dropna()
-
-            if not serie.empty:
-                ano_proceso_detectado = int(
-                    serie.iloc[0]
-                )
+        validos = [validar_periodo_r34(a, m) for a, m in zip(filtrado['__ANO_R34'], filtrado['__MES_R34'])]
+        registros_sin_periodo += sum(v is None for v in validos)
+        if periodo_manual is not None:
+            manual = validar_periodo_r34(*periodo_manual)
+            if manual is None:
+                raise ValueError('Período manual R34 inválido.')
+            validos = [v or manual for v in validos]
+        filtrado['__ANO_R34'] = [v[0] if v else None for v in validos]
+        filtrado['__MES_R34'] = [v[1] if v else None for v in validos]
+        periodos_detectados.update(v for v in validos if v)
+        # Algunas fuentes contienen explícitamente el acumulado del mes anterior.
+        col_anterior = next((c for c in filtrado if normalizar_nombre_columna(c) in {'MONTO TRANS ACUM BS MES 1', 'MONTO TRANS BS ACUM MES 1'}), None)
+        anterior = None
+        if col_anterior:
+            anterior = filtrado.copy()
+            tx_anterior = anterior[col_anterior].map(numero_tx)
+            anterior['__MONTO_TX'] = tx_anterior.map(lambda v: v[0])
+            anterior['__MOTIVO_MONTO_TX'] = tx_anterior.map(lambda v: v[1])
+            anterior['__ANO_R34'] = [v[0] - 1 if v and v[1] == 1 else v[0] if v else None for v in validos]
+            anterior['__MES_R34'] = [12 if v and v[1] == 1 else v[1] - 1 if v else None for v in validos]
+            anterior['__ES_HISTORIAL_TX'] = True
+        filtrado['__ES_HISTORIAL_TX'] = False
+        if anterior is not None:
+            filtrado = pd.concat([filtrado, anterior], ignore_index=True)
 
         partes.append(
             filtrado[
@@ -925,6 +924,7 @@ def procesar_csv_r34(
                     "__SERIAL_R34_ORIGINAL",
                     "__SERIAL_TERMINAL_R34",
                     "__MONTO_TX",
+                    "__MOTIVO_MONTO_TX", "__MES_R34", "__ANO_R34", "__ES_HISTORIAL_TX",
                 ]
             ]
         )
@@ -944,12 +944,18 @@ def procesar_csv_r34(
                 "__SERIAL_R34_ORIGINAL",
                 "__SERIAL_TERMINAL_R34",
                 "__MONTO_TX",
+                "__MOTIVO_MONTO_TX", "__MES_R34", "__ANO_R34", "__ES_HISTORIAL_TX",
             ]
         )
 
+    if len(periodos_detectados) == 1:
+        ano_proceso_detectado, mes_proceso_detectado = next(iter(periodos_detectados))
     detalle = {
         "archivo": nombre,
         "filas_leidas": filas_leidas,
+        "periodos": sorted(periodos_detectados),
+        "registros_sin_periodo": registros_sin_periodo,
+        "requiere_periodo_manual": registros_sin_periodo > 0 and periodo_manual is None,
         "filas_credicardpos":
             filas_credicardpos,
         "mes_proceso":
@@ -963,7 +969,8 @@ def procesar_csv_r34(
 
 def procesar_r34(
     archivos_r34,
-    chunksize=100_000
+    chunksize=100_000,
+    periodos_manuales=None,
 ):
     partes = []
     detalles = []
@@ -1002,7 +1009,8 @@ def procesar_r34(
                         df, detalle = procesar_csv_r34(
                             stream,
                             f"{archivo.name}::{csv_interno}",
-                            chunksize
+                            chunksize,
+                            (periodos_manuales or {}).get(f"{archivo.name}::{csv_interno}"),
                         )
 
                         partes.append(df)
@@ -1012,7 +1020,8 @@ def procesar_r34(
             df, detalle = procesar_csv_r34(
                 archivo,
                 archivo.name,
-                chunksize
+                chunksize,
+                (periodos_manuales or {}).get(archivo.name),
             )
 
             partes.append(df)
@@ -1206,6 +1215,8 @@ def preparar_ventas(
         df[
             "__ARCHIVO_ORIGEN"
         ] = archivo.name
+
+        df = preparar_periodos_ventas(df, archivo.name)
 
         col_afiliado = buscar_columna(
             df,
@@ -1418,6 +1429,7 @@ def preparar_ventas(
     )
 
     if not ventas.empty:
+        unir_historial_ventas(ventas)
         mascara_dup = (
             ventas[
                 "__CONCATENAR"
@@ -1756,6 +1768,9 @@ def crear_filas_nuevas(
         "__ESTATUS_NORMALIZADO"
     ] = "PENDIENTE"
 
+    for c in ('__MES_REPORTE', '__ANO_REPORTE', '__ARCHIVO_ORIGEN', '__TX_VENTAS', '__DIAGNOSTICO_PERIODO'):
+        if c in ventas_nuevas:
+            nuevas[c] = ventas_nuevas[c].values
     return nuevas
 
 
@@ -1812,6 +1827,10 @@ def integrar_ventas(
         sort=False,
     )
     combinado.attrs = comisiones.attrs.copy()
+    historias = dict(zip(ventas['__CONCATENAR'], ventas['__TX_VENTAS'])) if '__TX_VENTAS' in ventas else {}
+    if historias:
+        combinado['__TX_VENTAS'] = [historias.get(k, {}) for k in combinado['__CONCATENAR']]
+
 
     combinado[
         "__ROW_ID"
@@ -1891,6 +1910,7 @@ def preparar_access(
 
 def crear_lookup_r34(r34):
     lookup = {}
+    seriales_periodo = {}
 
     if r34.empty:
         return lookup
@@ -1905,6 +1925,19 @@ def crear_lookup_r34(r34):
 
         if not clave:
             continue
+
+        if '__MES_R34' in r34 or '__ANO_R34' in r34:
+            p = validar_periodo_r34(fila.get('__ANO_R34'), fila.get('__MES_R34'))
+            if not p:
+                continue
+            clave = (clave, *p)
+
+        if not bool(fila.get('__ES_HISTORIAL_TX', False)):
+            previo = seriales_periodo.get(clave)
+            monto = numero_tx(fila.get('__MONTO_TX'))[0]
+            anterior = numero_tx(previo.get('__MONTO_TX'))[0] if previo is not None else None
+            if previo is None or monto is not None and (anterior is None or monto > anterior):
+                seriales_periodo[clave] = fila.to_dict()
 
         actual = lookup.get(
             clave
@@ -1947,6 +1980,12 @@ def crear_lookup_r34(r34):
                     clave
                 ] = fila.to_dict()
 
+    for clave, registro in lookup.items():
+        if bool(registro.get('__ES_HISTORIAL_TX', False)):
+            # _1 aporta monto pasado, no prueba cuál era el serial de ese mes.
+            fuente = seriales_periodo.get(clave, {})
+            for c in ('__SERIAL_R34', '__SERIAL_R34_ORIGINAL', '__SERIAL_TERMINAL_R34', 'TERMINAL'):
+                registro[c] = fuente.get(c, '')
     return lookup
 
 
@@ -1967,7 +2006,7 @@ def normalizar_estado_tx(valor):
     return equivalencias.get(texto, valor)
 
 
-def calcular_observacion(estado_tx, access, equipo, validacion=None):
+def calcular_observacion(estado_tx, access, equipo, validacion=None, requiere_access=True):
     """Texto sugerido por las reglas confirmadas; nunca cambia ESTATUS."""
     tx = normalizar_estado_tx(estado_tx)
     if tx in {"N/A", "N/D"} or normalizar_estado_tx(validacion) in {"N/A", "N/D"}:
@@ -1975,7 +2014,7 @@ def calcular_observacion(estado_tx, access, equipo, validacion=None):
     if tx in {"SIN TX", "C/P SIN TX"}:
         return "NO CUMPLE EL CRITERIO DE PAGO"
     if tx == "CON_TX":
-        if estandarizar_equipo(equipo) == "Pinpagos" or normalizar_texto(access) == "SI":
+        if not requiere_access or estandarizar_equipo(equipo) == "Pinpagos" or normalizar_texto(access) == "SI":
             return "POR PAGAR"
         if normalizar_texto(access) == "NO":
             return "NO POSEE REGISTRO DE OPERADORES ACCESS COMERCES"
@@ -2060,15 +2099,25 @@ def actualizar_observaciones(resultado, lookup, filas_evaluadas):
 
     for idx in filas_evaluadas:
         fila = resultado.loc[idx]
-        registro = lookup.get(fila["__CONCATENAR"], {})
-        tx = estado_transaccion(registro.get("__MONTO_TX"))
+        registro = registro_periodo(lookup, fila) or {}
+        tx = fila.get("__ESTADO_TX_CALCULADO") or estado_historial(fila, registro.get("__MONTO_TX"))
         serial_r34 = serial_r34_para_equipo(registro, fila['__EQUIPO_STD'])
         valores_validacion = [fila.get(c, "") for c in
                               ("__AFILIADO", "__TERMINAL", "__SERIAL_COMISION")]
         valores_validacion.append(serial_r34)
         validacion = next((normalizar_estado_tx(v) for v in valores_validacion
                            if normalizar_estado_tx(v) in {"N/A", "N/D"}), None)
-        sugerida = calcular_observacion(tx, fila["__ACCESS_CALCULADO"], fila["__EQUIPO_STD"], validacion)
+        sugerida = calcular_observacion(tx, fila["__ACCESS_CALCULADO"], fila["__EQUIPO_STD"], validacion, requiere_access_para_venta(fila))
+        if tx == 'N/A':
+            codigos = str(fila.get('__MOTIVO_TX', 'OTRO_NA')).split(' | ')
+            etiquetas = {'NO_ENCONTRADO_R34': 'NO ENCONTRADO EN R34',
+                         'MONTO_TX_VACIO': 'MONTO TX VACIO', 'MONTO_TX_INVALIDO': 'MONTO TX INVALIDO',
+                         'SERIAL_SIN_FUENTE_CONFIABLE': 'SERIAL SIN FUENTE CONFIABLE'}
+            principal = ('SERIAL_SIN_FUENTE_CONFIABLE' if 'SERIAL_SIN_FUENTE_CONFIABLE' in codigos
+                         else next((c for c in codigos if c in etiquetas), 'OTRO_NA'))
+            sugerida = 'N/A - ' + etiquetas.get(principal, 'PENDIENTE POR VALIDAR')
+            if fila.get('__ORIGEN') != 'VENTAS_NUEVAS':
+                continue
         texto, automatica = combinar_observacion(
             fila[col_obs], sugerida, fila["__OBSERVACION_AUTOMATICA"],
         )
@@ -2088,6 +2137,7 @@ def actualizar_observaciones(resultado, lookup, filas_evaluadas):
 
 
 def estado_transaccion(monto):
+    monto, _ = numero_tx(monto)
     if (
         monto is None
         or pd.isna(monto)
@@ -2246,6 +2296,9 @@ def recalcular_comisiones(
         )
     ]
 
+    resultado = aplicar_historial(resultado, lookup)
+    resultado['__MOTIVO_TX'] = ''
+
     if col_estatus:
         resultado[
             "__ESTATUS_NORMALIZADO"
@@ -2369,13 +2422,13 @@ def recalcular_comisiones(
                 "Falta afiliado o terminal"
             )
 
-        registro_r34 = lookup.get(
-            clave
-        )
+        registro_r34 = registro_periodo(lookup, fila)
+        motivos_tx = []
 
         if registro_r34 is None:
             monto = None
             serial_r34 = ""
+            motivos_tx.append("NO_ENCONTRADO_R34")
 
             razones.append(
                 "No encontrado en R34"
@@ -2388,7 +2441,27 @@ def recalcular_comisiones(
 
             serial_r34 = serial_r34_para_equipo(registro_r34, equipo)
             if not serial_r34:
+                motivos_tx.append("SERIAL_SIN_FUENTE_CONFIABLE")
                 razones.append('R34 sin fuente de serial exacta y confiable; requiere revisión.')
+
+        if registro_r34 is not None:
+            monto, error_monto = numero_tx(monto)
+            error_monto = registro_r34.get('__MOTIVO_MONTO_TX') or error_monto
+            if error_monto:
+                motivos_tx.append(error_monto)
+        if serial_comision and serial_r34 and serial_comision != serial_r34:
+            motivos_tx.append('SERIAL_DIFERENTE_R34')
+        for columna, valor in fila.items():
+            if re.fullmatch(r'MONTO TX (?:' + '|'.join(MESES_ES.values()) + ')', str(columna)):
+                _, error = numero_tx(valor)
+                if error and error not in motivos_tx:
+                    motivos_tx.append(error)
+        hist = fila.get('__TX_VENTAS')
+        if isinstance(hist, dict):
+            for _, error in hist.values():
+                if error and error not in motivos_tx:
+                    motivos_tx.append(error)
+        resultado.at[idx, '__MOTIVO_TX'] = ' | '.join(motivos_tx)
 
         serial_r34 = normalizar_identificador(
             serial_r34
@@ -2414,12 +2487,16 @@ def recalcular_comisiones(
                 "Serial no coincide con R34"
             )
 
-        estado_tx = estado_transaccion(
-            monto
-        )
+        estado_tx = estado_historial(fila, monto)
+        if normalizar_estado_tx(fila.get(col_tx, '')) == 'CON_TX':
+            estado_tx = 'CON_TX'
+        if estado_tx == 'N/A' and not motivos_tx:
+            resultado.at[idx, '__MOTIVO_TX'] = 'OTRO_NA'
 
-        if equipo == "Pinpagos":
-            access = "NO APLICA"
+
+        if not requiere_access_para_venta(fila):
+            if equipo == "Pinpagos":
+                access = "NO APLICA"
             aplica = (
                 estado_tx == "CON_TX"
             )
@@ -2469,7 +2546,7 @@ def recalcular_comisiones(
                 col_access
             ] = access
 
-        if col_monto_mes:
+        if col_monto_mes and not periodo_fila(fila) and not any(isinstance(k, tuple) for k in lookup):
             resultado.loc[
                 idx,
                 col_monto_mes
@@ -2477,6 +2554,8 @@ def recalcular_comisiones(
 
         if (
             aplica
+            and not periodo_fila(fila)
+            and '__MES_REPORTE' not in resultado and '__MES_R34' not in r34
             and col_estatus
         ):
             resultado.loc[
@@ -2539,15 +2618,8 @@ def recalcular_comisiones(
 def determinar_mes_r34(
     detalle_r34
 ):
-    for detalle in detalle_r34:
-        mes = detalle.get(
-            "mes_proceso"
-        )
-
-        if mes:
-            return int(mes)
-
-    return None
+    periodos = {tuple(p) for d in detalle_r34 for p in d.get('periodos', [])}
+    return next(iter(periodos))[1] if len(periodos) == 1 else None
 
 
 def procesar_todo(
@@ -2557,6 +2629,7 @@ def procesar_todo(
     archivo_access,
     chunksize=100_000,
     precios=None,
+    periodos_r34_manuales=None,
 ):
     archivo_comisiones.seek(0)
 
@@ -2570,8 +2643,12 @@ def procesar_todo(
 
     r34, detalle_r34 = procesar_r34(
         archivos_r34,
-        chunksize
+        chunksize,
+        periodos_r34_manuales,
     )
+    pendientes_periodo = [d['archivo'] for d in detalle_r34 if d.get('requiere_periodo_manual')]
+    if pendientes_periodo:
+        raise PeriodoR34Requerido(pendientes_periodo)
 
     comisiones = preparar_comisiones(
         archivo_comisiones
@@ -3447,6 +3524,34 @@ def _crear_xml_ventas_actualizado(
                 ),
             )
 
+    # Nuevas columnas TX se agregan sin mover referencias existentes.
+    nuevas_tx = final.attrs.get('columnas_tx_nuevas', {})
+    if nuevas_tx:
+        fila_encabezado = _buscar_o_crear_fila(sheet_data, 1)
+        plantillas = [i for i, c in enumerate(columnas_excel, 1)
+                      if str(c).startswith('MONTO TX ') and c not in nuevas_tx]
+        plantilla = plantillas[-1] if plantillas else None
+        cols_xml = raiz.find(f'{{{_NS_MAIN}}}cols')
+        for nombre in nuevas_tx:
+            posicion = columnas_excel.index(nombre) + 1
+            for fila_xml in sheet_data.findall(f'{{{_NS_MAIN}}}row'):
+                numero = int(fila_xml.get('r'))
+                celda = _buscar_o_crear_celda(fila_xml, posicion, numero)
+                if plantilla:
+                    modelo = fila_xml.find(f"{{{_NS_MAIN}}}c[@r='{_referencia_celda(plantilla, numero)}']")
+                    if modelo is not None and modelo.get('s') is not None:
+                        celda.set('s', modelo.get('s'))
+                if numero == 1:
+                    _escribir_valor_xml(celda, nombre)
+            if cols_xml is not None and plantilla:
+                for col in list(cols_xml):
+                    if int(col.get('min')) <= plantilla <= int(col.get('max')):
+                        nueva = copy(col)
+                        nueva.set('min', str(posicion))
+                        nueva.set('max', str(posicion))
+                        cols_xml.append(nueva)
+                        break
+
     ultima_fila = max(
         1,
         primera_fila_datos
@@ -3464,11 +3569,8 @@ def _crear_xml_ventas_actualizado(
         ),
     )
 
-    return ET.tostring(
-        raiz,
-        encoding="utf-8",
-        xml_declaration=True,
-    )
+    from formato_revision import _serializar
+    return _serializar(raiz, xml_original)
 
 
 def generar_excel_resultado(
@@ -3549,6 +3651,18 @@ def generar_excel_resultado(
             from formato_revision import conservar_filas_originales, aplicar_rojo
             xml_hoja_original, originales_restantes = conservar_filas_originales(
                 xml_hoja_original, final, cantidad_original)
+            from tx_exportacion import insertar_columnas_xml, referencias_otra_parte, tabla_xml, cadena_calculo_xml
+            import posixpath
+            workbook_xml = ET.fromstring(zip_entrada.read('xl/workbook.xml'))
+            sheet_id = next(h.get('sheetId') for h in workbook_xml.find(f'{{{_NS_MAIN}}}sheets') if h.get('name') == hoja)
+            tablas_ventas = set()
+            rel_path = posixpath.dirname(ruta_hoja) + "/_rels/" + posixpath.basename(ruta_hoja) + ".rels"
+            if rel_path in zip_entrada.namelist():
+                for rel in ET.fromstring(zip_entrada.read(rel_path)):
+                    if rel.get("Type", "").endswith("/table"):
+                        target = rel.get("Target")
+                        tablas_ventas.add(target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join(posixpath.dirname(ruta_hoja), target)))
+            xml_hoja_original = insertar_columnas_xml(xml_hoja_original, final)
             xml_hoja_nuevo = _crear_xml_ventas_actualizado(
                 xml_hoja_original,
                 final,
@@ -3577,6 +3691,18 @@ def generar_excel_resultado(
                         )
 
                         continue
+
+                    if final.attrs.get('columnas_tx_nuevas'):
+                        if info.filename == 'xl/calcChain.xml':
+                            zip_salida.writestr(info, cadena_calculo_xml(zip_entrada.read(info), final, sheet_id))
+                            continue
+                        if info.filename in tablas_ventas:
+                            zip_salida.writestr(info, tabla_xml(zip_entrada.read(info), final))
+                            continue
+                        if (info.filename == 'xl/workbook.xml' or
+                            info.filename.startswith(('xl/worksheets/', 'xl/charts/')) and info.filename.endswith('.xml')):
+                            zip_salida.writestr(info, referencias_otra_parte(zip_entrada.read(info), final))
+                            continue
 
                     # Copiar el resto de partes de forma
                     # STREAMING. Muy importante para archivos

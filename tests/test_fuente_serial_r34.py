@@ -36,13 +36,14 @@ class FuenteSerialTests(unittest.TestCase):
             self.assertEqual(caso['opciones'],())
 
     def test_csv_textual_preserva_evidencia_y_comparte_resultado(self):
-        csv=('PERTENENCIA;AFIPOS;SERIAL;TERMINAL;MONTO_TRANS_BS_ACUM_MES\n'
-             'CREDICARDPOS;1011;1,23457E+11;000123456789012 [001] POS;2000\n')
+        csv=('PERTENENCIA;AFIPOS;SERIAL;TERMINAL;MONTO_TRANS_BS_ACUM_MES;MES_PROCESO;ANO_PROCESO\n'
+             'CREDICARDPOS;1011;1,23457E+11;000123456789012 [001] POS;2000;8;2026\n')
         r34,_=procesar_csv_r34(io.BytesIO(csv.encode()),'ficticio.csv',chunksize=1)
         self.assertEqual(r34.iloc[0]['__SERIAL_R34_ORIGINAL'],'1,23457E+11')
         self.assertEqual(serial_r34_para_equipo(r34.iloc[0],'Castle Dynamo'),'123456789012')
         for equipo in ['Castle Dynamo','Zappy S1MINI2','Pinpagos']:
             r=resultados(('A','123456789012'));r['final'].loc[1,'EQUIPO']=equipo
             self.assertFalse(incidencias(r['final'],r34)[2])
+            r['final']['__ANO_REPORTE']=2026;r['final']['__MES_REPORTE']=8
             final=recalcular_comisiones(r['final'],r34,set())
             self.assertEqual(final.iloc[1]['__SERIAL_R34_COMPARADO'],'123456789012')

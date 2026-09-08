@@ -6,11 +6,11 @@ from revision_manual import incidencias, aplicar_decision, tabla_comisiones
 def mostrar_revision(resultados, precios):
     estado = st.session_state.setdefault('revision_nuevas', {})
     casos = incidencias(resultados['final'], resultados['r34'], estado.get('decisiones'))
-    st.subheader('REVISIÓN MANUAL DE VENTAS NUEVAS')
+    st.subheader('REVISIÓN MANUAL DE VENTAS')
     st.metric('Ventas nuevas de esta corrida', int(resultados['final']['__ORIGEN'].eq('VENTAS_NUEVAS').sum()))
     titulos = {1: 'Seriales repetidos', 2: 'Serial Comisiones vs R34', 3: 'Banco del Tesoro no Jornada'}
     vacios = {1: '✓ Seriales repetidos revisados: no hay casos pendientes en ventas nuevas.',
-              2: '✓ Seriales R34 revisados: no hay diferencias pendientes en ventas nuevas.',
+              2: '✓ No hay diferencias de serial pendientes con la evidencia R34 cargada.',
               3: '✓ Tesoro revisado: no hay ventas nuevas pendientes de validar como Jornada.'}
     for panel, paso in zip(st.columns(3), (1, 2, 3)):
         panel.metric(titulos[paso] + ' para revisar (opcional)', len(casos[paso]))
@@ -31,14 +31,22 @@ def mostrar_revision(resultados, precios):
                     continue
                 grupos_mostrados.add(grupo)
             row_id = caso['row_id']
-            with st.expander(f'Venta NUEVA — ID {row_id}', expanded=True):
+            origen = 'HISTÓRICA' if caso.get('origen') == 'COMISIONES' else 'NUEVA'
+            with st.expander(f'Venta {origen} — ID {row_id}', expanded=True):
                 st.dataframe(tabla_comisiones(resultados['final'], caso.get('relacionados', [row_id])),
                              hide_index=True, use_container_width=True)
                 if paso == 1:
                     st.caption('Selecciona expresamente la fila histórica o nueva que quieres modificar.')
                 if paso == 2:
+                    if origen == 'HISTÓRICA':
+                        st.caption('PENDIENTE DE REVISIÓN — La decisión solo cambia el serial; conserva montos, estatus y observaciones.')
+                    periodo = caso.get('periodo_venta')
+                    st.write('PERÍODO DE LA VENTA:', f'{periodo[1]:02d}/{periodo[0]}' if periodo else 'No disponible')
                     st.write('SERIAL ACTUAL EN COMISIONES:', caso['serial'] or '(vacío)')
                     st.write('SERIAL ENCONTRADO EN R34:', ', '.join(caso['opciones']))
+                    st.dataframe([{'Período R34': f'{p[1]:02d}/{p[0]}' if p else 'No disponible',
+                                   'Serial R34': s or '(sin fuente confiable)', 'Fuente': fuente}
+                                  for s, p, fuente in caso.get('evidencia', [])], hide_index=True)
                     if caso.get('sin_fuente_confiable'):
                         st.warning('R34 contiene un registro sin fuente de serial exacta y confiable. Se conserva el serial de Comisiones por defecto.')
                 key = f'revision_{paso}_{row_id}'

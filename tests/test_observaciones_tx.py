@@ -91,7 +91,7 @@ class IntegracionObservacionTests(unittest.TestCase):
         casos = [(1500, {'222'}, 'POR PAGAR', 'Aplica Pago'),
                  (1500, set(), 'NO POSEE REGISTRO DE OPERADORES ACCESS COMERCES', 'Pendiente'),
                  (1, {'222'}, 'NO CUMPLE EL CRITERIO DE PAGO', 'Pendiente'),
-                 (None, {'222'}, 'PENDIENTE POR VALIDAR', 'Pendiente')]
+                 (None, {'222'}, None, 'Pendiente')]
         for monto, access, observacion, estatus in casos:
             with self.subTest(monto=monto, access=access):
                 base = self.base()
@@ -122,11 +122,13 @@ class IntegracionObservacionTests(unittest.TestCase):
         self.assertEqual(final.loc[0, 'ESTATUS'], 'Aplica Pago')
 
     def test_revalidacion_actualiza_automaticas_y_respeta_edicion_manual(self):
-        final = p.recalcular_comisiones(self.base(), self.r34(), {'222'})
+        base = self.base(); base['__ORIGEN'] = 'VENTAS_NUEVAS'
+        final = p.recalcular_comisiones(base, self.r34(), {'222'})
         self.assertEqual(final.loc[0, 'OBSERVACION'], 'POR PAGAR')
         final.loc[0, 'AFILIADO.1'] = '333'
         final = p.recalcular_comisiones(final, self.r34(), {'222'})
-        self.assertEqual(final.loc[0, 'OBSERVACION'], 'PENDIENTE POR VALIDAR')
+        self.assertEqual(final.loc[0, 'OBSERVACION'], 'NO POSEE REGISTRO DE OPERADORES ACCESS COMERCES')
+        self.assertEqual(final.loc[0, 'CON TX'], 'CON_TX')
         self.assertEqual(final.loc[0, 'ESTATUS'], 'Aplica Pago')
         self.assertTrue(final.loc[0, '__REQUIERE_REVISION'])
         final.loc[0, 'OBSERVACION'] = 'Corrección manual ficticia'

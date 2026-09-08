@@ -16,7 +16,7 @@ class MotorComisionesTests(unittest.TestCase):
         for equipo, fecha, total in [
             ('Castle Dynamo', date(2026, 1, 1), 20), ('Otro POS', date(2026, 1, 1), 20),
             ('Sappy', date(2026, 7, 14), 20), ('Zappy S1MINI2', date(2026, 7, 15), 25),
-            ('Pinpagos', date(2026, 6, 30), 10), ('Pinpagos', date(2026, 7, 1), 15),
+            ('Pinpagos', date(2026, 6, 30), 15), ('Pinpagos', date(2026, 7, 1), 15),
         ]:
             with self.subTest(equipo=equipo, fecha=fecha):
                 r = self.calcular(equipo=equipo, fecha=fecha)
@@ -27,7 +27,7 @@ class MotorComisionesTests(unittest.TestCase):
 
     def test_fecha_invalida_no_inventa_tarifa(self):
         for fecha in [None, '', '31/02/2026', 0]:
-            for equipo in ['Castle Dynamo', 'Zappy S1MINI2', 'Pinpagos']:
+            for equipo in ['Castle Dynamo', 'Zappy S1MINI2']:
                 r = self.calcular(fecha=fecha, equipo=equipo)
                 self.assertIsNone(r['monto_total'])
                 self.assertTrue(r['requiere_revision'])
@@ -56,7 +56,7 @@ class MotorComisionesTests(unittest.TestCase):
         for equipo, fecha, banco, agente in [
             ('Castle Dynamo', date(2026, 8, 1), 10, 10),
             ('Zappy S1MINI2', date(2026, 7, 1), 10, 15),
-            ('Pinpagos', date(2026, 6, 30), 7.5, 2.5),
+            ('Pinpagos', date(2026, 6, 30), 7.5, 7.5),
             ('Pinpagos', date(2026, 7, 1), 7.5, 7.5),
         ]:
             r = self.calcular(equipo=equipo, fecha=fecha, banco='Banco del Tesoro', es_jornada=True)
@@ -105,12 +105,12 @@ class MotorComisionesTests(unittest.TestCase):
     def test_jornada_contado_por_region_y_precision(self):
         for equipo, canal, total in [('Zappy S1MINI2', 'Región Centro', 25),
                                      ('Castle Dynamo', 'Centro Tipo II', 50),
-                                     ('Pinpagos', 'GranPro', 16.64)]:
+                                     ('Pinpagos', 'GranPro', 15)]:
             r = self.calcular(equipo=equipo, modalidad='Al Contado', canal=canal,
                               banco='Banco del Tesoro', es_jornada=True)
             self.assertEqual(r['monto_total'], total)
-            self.assertEqual(r['monto_banco'], 10)
-            self.assertEqual(r['monto_agente'], round(total-10, 2))
+            self.assertEqual(r['monto_banco'], 7.5 if equipo == 'Pinpagos' else 10)
+            self.assertEqual(r['monto_agente'], round(total-r['monto_banco'], 2))
             self.assertFalse(r['requiere_revision'])
 
     def test_cuadre_exacto_y_diferencia(self):
@@ -212,7 +212,7 @@ class AplicacionMotorTests(unittest.TestCase):
         casos = [('COMODATO', 'Castle', '2026-08-01', 'Región Centro', 20),
                  ('COMODATO', 'Zappy', '2026-07-14', 'Región Centro', 20),
                  ('COMODATO', 'Zappy', '2026-07-15', 'Región Centro', 25),
-                 ('COMODATO', 'Pinpagos', '2026-06-30', 'Región Centro', 10),
+                 ('COMODATO', 'Pinpagos', '2026-06-30', 'Región Centro', 15),
                  ('COMODATO', 'Pinpagos', '2026-07-01', 'Región Centro', 15),
                  *[('AL CONTADO', 'Castle', None, a, 25) for a in
                    ['Región Centro', 'Región Oriente', 'Región Occidente']],

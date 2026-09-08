@@ -112,7 +112,38 @@ revalidación, textos en columnas antes vacías y la conversión Oficina/Jornada
 La asignación usa tipos explícitos por columna y omite campos sin cambios;
 las fórmulas o marcas mixtas históricas no se convierten a números ni se borran.
 
-Los sufijos TX mensuales se conservan como parte del encabezado; no se equipara
-la columna con _1 a la columna sin sufijo. No se asignan meses hasta confirmar
-el significado de _1. Los archivos de entrada reales se analizan desde sus
-rutas originales, fuera del repositorio, sin incorporarlos a fixtures o logs.
+TX mensual (reglas confirmadas): actual corresponde al período del reporte y `_1`
+al anterior, incluyendo enero/diciembre. FECHA REPORTE determina el origen; un
+período ausente se diagnostica, no se deduce del nombre del archivo. R34 conserva
+ANO_PROCESO/MES_PROCESO por registro y solicita respaldo manual solo para registros
+sin período válido. Su monto prevalece sobre Ventas en la misma clave/año/mes;
+las diferencias quedan internas. Solo se actualizan períodos explícitos de fuentes.
+
+CON TX evalúa todo el historial: >1000, =1000, positivos menores, ceros/guiones,
+y finalmente N/A si no hay datos utilizables. Un CON_TX previo se conserva.
+Los vacíos e inválidos se distinguen internamente. Las observaciones N/A canónicas
+se generan para ventas nuevas sin nota útil; se conservan las notas históricas.
+Las columnas TX nuevas se insertan junto al bloque mediante XML, copiando estilos
+y ajustando referencias. No se carga el workbook completo durante la exportación.
+
+`test_tx_mensual.py` cubre calendario, prioridades, historial acumulativo, ausencia,
+invalidación, respaldo de período, actualizaciones por `_1`, creación y exportación
+con referencias a columnas desplazadas y tablas. Los datos de prueba son ficticios.
+Los archivos reales nunca se incorporan al repositorio ni a los logs.
+
+Validación 5.6: Pinpagos tiene total fijo de 15 USD, independiente de modalidad,
+fecha y precio. Tesoro y Bancaribe especial distribuyen 7.50 + 7.50. Un reparto
+indeterminado conserva el total conocido y deja los componentes pendientes;
+los registros PAGADO conservan sus importes históricos para auditoría.
+Jornada Tesoro y el reparto Bancaribe confirmado no requieren Access para pago.
+La presencia real en Access sigue diagnosticándose sin inventar coincidencias.
+`test_excepciones_pago.py` comprueba las excepciones y los negativos de detección.
+El R34 admite el alias exacto MONTO_TRANS_BS_ACUM_MES_1 para el período anterior.
+# Paso 2: alcance ampliado confirmado
+
+La revisión de seriales incluye filas nuevas e históricas y muestra el período
+de venta y de cada evidencia R34, junto con la fuente TERMINAL/SERIAL. Los registros
+sintéticos de TX `_1` no constituyen evidencia de serial. Elegir un serial solo
+actualiza el identificador público y su copia interna: no recalcula comisiones,
+TX, estatus ni observaciones. Los tests cubren históricos PENDIENTE/PAGADO,
+fuentes exactas y cambios de período que reabren una decisión.

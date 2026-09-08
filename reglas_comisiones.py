@@ -173,6 +173,8 @@ def calcular_tarifa(equipo, modalidad, fecha, canal='', precios=None):
     modalidad = normalizar_texto(_texto(modalidad))
     if not equipo:
         raise ValueError('Falta identificar el equipo.')
+    if equipo == 'Pinpagos':
+        return Decimal('15'), 'Pinpagos - tarifa única - 15.00 USD'
     if modalidad == 'COMODATO':
         fecha = _fecha_tarifa(fecha)
         if fecha is None:
@@ -181,10 +183,6 @@ def calcular_tarifa(equipo, modalidad, fecha, canal='', precios=None):
             posterior = fecha >= date(2026, 7, 15)
             total = Decimal('25' if posterior else '20')
             regla = f"Comodato - Zappy - FECHA {'>=' if posterior else '<'} 15/07/2026"
-        elif equipo == 'Pinpagos':
-            posterior = fecha >= date(2026, 7, 1)
-            total = Decimal('15' if posterior else '10')
-            regla = f"Comodato - Pinpagos - FECHA {'>=' if posterior else '<'} 01/07/2026"
         else:
             total, regla = Decimal('20'), 'Comodato - equipo distinto de Zappy/Pinpagos'
     elif modalidad == 'AL CONTADO':
@@ -224,6 +222,18 @@ def identificar_jornada(banco, canal):
     return False
 
 
+def requiere_access_para_venta(fila):
+    if estandarizar_equipo(_texto(fila.get('EQUIPO'))) == 'Pinpagos':
+        return False
+    jornada = identificar_jornada(fila.get('BANCO'), fila.get('CANAL DE VENTA (JORNADA QUE PERTENECE)'))
+    if jornada is True:
+        return False
+    partes = _texto(fila.get('VENDEDOR')).split('/')
+    especial = (_banco(fila.get('BANCO')) == 'BANCARIBE' and len(partes) == 2
+                and all(_beneficiario(v) for v in partes))
+    return not especial
+
+
 def calcular_comision(*, equipo, modalidad, fecha, canal='', banco='', es_jornada=None,
                        vendedor_banco='', vendedor_freelance='', vendedor_agente='', precios=None,
                        es_freelance=False, conservar_vendedor_completo=False):
@@ -240,9 +250,9 @@ def calcular_comision(*, equipo, modalidad, fecha, canal='', banco='', es_jornad
     try:
         modo = normalizar_texto(_texto(modalidad))
         equipo = estandarizar_equipo(_texto(equipo))
-        if modo not in {'COMODATO', 'AL CONTADO'}:
+        if equipo != 'Pinpagos' and modo not in {'COMODATO', 'AL CONTADO'}:
             raise ValueError('Modalidad sin regla confirmada.')
-        if modo == 'COMODATO' and _fecha_tarifa(fecha) is None:
+        if equipo != 'Pinpagos' and modo == 'COMODATO' and _fecha_tarifa(fecha) is None:
             raise ValueError('FECHA de la venta vacía o inválida; no se asigna tarifa.')
         freelance_sin_reparto = (es_freelance and normalizar_canal(canal) == 'CREDICARDPOS'
                                  and es_jornada is not True and not conservar_vendedor_completo)
@@ -264,21 +274,25 @@ def calcular_comision(*, equipo, modalidad, fecha, canal='', banco='', es_jornad
         if r['vendedor_freelance'] or es_freelance:
             if r['vendedor_agente'] or es_jornada is True:
                 raise ValueError('Combinación de freelance con agente/jornada no definida.')
-            r['monto_freelance'] = 10.0
+            r['monto_freelance'] = 15.0 if equipo == 'Pinpagos' else 10.0
             if r['vendedor_banco']:
                 if _banco(r['vendedor_banco']) != 'BANCARIBE':
                     raise ValueError('Banco de freelance sin reparto confirmado.')
-                r['monto_banco'], total = 10.0, Decimal('20')
-                regla = 'Freelancer + Bancaribe - Freelance 10 + Banco 10 - Total 20 USD'
+                if equipo == 'Pinpagos':
+                    r['monto_banco'] = r['monto_freelance'] = 7.5
+                    total, regla = Decimal('15'), 'Pinpagos + Bancaribe - 7.50 + 7.50 - Total 15 USD'
+                else:
+                    r['monto_banco'], total = 10.0, Decimal('20')
+                    regla = 'Freelancer + Bancaribe - Freelance 10 + Banco 10 - Total 20 USD'
             else:
-                total, regla = Decimal('10'), 'Freelancer solo - 10 USD'
+                total, regla = (Decimal('15'), 'Pinpagos Freelancer - 15 USD') if equipo == 'Pinpagos' else (Decimal('10'), 'Freelancer solo - 10 USD')
             if not r['vendedor_freelance']:
                 r['monto_pendiente_asignacion'] = r['monto_freelance']
-                avisos.append('Beneficiario freelance pendiente de asignar: 10.00 USD.')
+                avisos.append(f"Beneficiario freelance pendiente de asignar: {r['monto_freelance']:.2f} USD.")
         else:
             canal_tarifa = normalizar_agente(canal)
             agente_tarifa = normalizar_agente(r['vendedor_agente'])
-            if modo == 'AL CONTADO' and canal_tarifa and agente_tarifa and canal_tarifa != agente_tarifa:
+            if equipo != 'Pinpagos' and modo == 'AL CONTADO' and canal_tarifa and agente_tarifa and canal_tarifa != agente_tarifa:
                 raise ValueError('Agente y canal indican tarifas diferentes; confirmar asignación.')
             total, regla = calcular_tarifa(equipo, modo, fecha, canal_tarifa or agente_tarifa or canal, precios)
             banco_jornada = _banco(r['vendedor_banco']) or _banco(banco)
@@ -290,7 +304,7 @@ def calcular_comision(*, equipo, modalidad, fecha, canal='', banco='', es_jornad
                 if r['vendedor_banco'] and _banco(r['vendedor_banco']) != 'BANCO DEL TESORO':
                     raise ValueError('Beneficiario bancario incompatible con Jornada del Tesoro.')
                 r['vendedor_banco'] = r['vendedor_banco'] or 'BANCO DEL TESORO'
-                monto_banco = Decimal('7.50') if modo == 'COMODATO' and equipo == 'Pinpagos' else Decimal('10')
+                monto_banco = Decimal('7.50') if equipo == 'Pinpagos' else Decimal('10')
                 # Excepción confirmada exclusiva de Comodato, incluso antes del corte.
                 if modo == 'COMODATO' and equipo == 'Zappy S1MINI2':
                     total = Decimal('25')
@@ -315,6 +329,9 @@ def calcular_comision(*, equipo, modalidad, fecha, canal='', banco='', es_jornad
     except ValueError as error:
         # El mensaje nunca contiene identificadores ni nombres de personas.
         r.update(monto_banco=None, monto_freelance=None, monto_agente=None, monto_total=None)
+        if equipo == 'Pinpagos':
+            r.update(monto_total=15.0, monto_pendiente_asignacion=15.0,
+                     regla_aplicada='Pinpagos - total 15 USD; reparto pendiente de validar')
         avisos.append(str(error))
     r['advertencia'] = ' | '.join(avisos)
     r['requiere_revision'] = bool(avisos)
@@ -446,10 +463,19 @@ def aplicar_motor_comisiones(df, precios=None):
         if len(tarifas) > 1:
             avisos.append('Canales/agente con equivalencias diferentes; confirmar tarifa.')
         vacios = all(_texto(fila[destinos[k]]) == '' for k in montos)
-        if vacios and not avisos:
+        pin_recalculable = (estandarizar_equipo(_texto(datos['equipo'])) == 'Pinpagos'
+                            and (fila.get('__ORIGEN') == 'VENTAS_NUEVAS'
+                                 or normalizar_texto(_texto(fila.get('ESTATUS'))) == 'PENDIENTE'))
+        if (vacios or pin_recalculable) and not avisos:
             for k, c in destinos.items():
                 resultado.at[idx, c] = r[k]
             diferencia = r['diferencia']
+        elif pin_recalculable and r['monto_total'] == 15 and avisos:
+            # El total es incondicional; un reparto desconocido no autoriza
+            # conservar componentes antiguos incompatibles ni inventar otros.
+            for k in montos:
+                resultado.at[idx, destinos[k]] = r[k]
+            diferencia = None
         else:
             observado = validar_cuadre(*(fila[destinos[k]] for k in montos))
             diferencia = observado['diferencia']
