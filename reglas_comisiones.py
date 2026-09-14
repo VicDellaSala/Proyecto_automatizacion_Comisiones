@@ -28,11 +28,11 @@ def normalizar_texto(valor):
     return texto.upper()
 
 
-def estandarizar_equipo(valor):
+def estandarizar_equipo(valor, *, conservar_desconocidos=False):
     texto = normalizar_texto(valor)
 
     if not texto:
-        return ""
+        return valor if conservar_desconocidos else ""
 
     if (
         "PINPAGO" in texto
@@ -56,7 +56,7 @@ def estandarizar_equipo(valor):
     ):
         return "Castle Dynamo"
 
-    return str(valor).strip()
+    return valor if conservar_desconocidos else str(valor).strip()
 
 
 def obtener_precio_equipo(equipo, precios=None):
@@ -124,9 +124,14 @@ def normalizar_agente(valor):
     return None
 
 
-def normalizar_canal(valor):
+def normalizar_canal(valor, *, conservar_desconocidos=False):
     """Canal comercial canónico; nunca interpreta la columna de Jornada."""
-    return normalizar_agente(valor) or normalizar_texto(_texto(valor))
+    canonico = normalizar_agente(valor)
+    if canonico is not None:
+        return canonico
+    if normalizar_texto(_texto(valor)) == 'CREDICARDPOS':
+        return 'CREDICARDPOS'
+    return valor if conservar_desconocidos else normalizar_texto(_texto(valor))
 
 
 def _fecha_tarifa(valor):
@@ -387,7 +392,7 @@ def aplicar_motor_comisiones(df, precios=None):
         if canales[0]:
             fila[canales[0]] = normalizar_canal(fila[canales[0]])
             if fila.get('__ORIGEN') == 'VENTAS_NUEVAS':
-                resultado.at[idx, canales[0]] = fila[canales[0]]
+                resultado.at[idx, canales[0]] = normalizar_canal(df.at[idx, canales[0]], conservar_desconocidos=True)
                 agente_actual = _beneficiario(fila[destinos['vendedor_agente']])
                 if agente_actual:
                     resultado.at[idx, destinos['vendedor_agente']] = normalizar_agente(agente_actual) or agente_actual

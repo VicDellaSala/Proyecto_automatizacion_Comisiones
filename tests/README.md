@@ -1,5 +1,11 @@
 # Pruebas de procesamiento
 
+`test_textos_salida.py` verifica la estandarización visible de EQUIPO, CANAL y
+aliases conocidos de VENDEDOR AGENTE AUTORIZADO en filas históricas y nuevas.
+Reutiliza los normalizadores del motor y preserva literalmente desconocidos.
+La exportación normaliza una copia sin recalcular ni cambiar el resultado fuente;
+las pruebas comprueban celdas XLSX, estructura, formatos y partes ajenas a VENTAS.
+
 Ejecutar desde la raíz, con las dependencias de requirements.txt instaladas:
 
 ```sh

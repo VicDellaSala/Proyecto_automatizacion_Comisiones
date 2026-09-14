@@ -15,7 +15,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from reglas_comisiones import estandarizar_equipo, aplicar_motor_comisiones, requiere_access_para_venta
+from reglas_comisiones import (estandarizar_equipo, aplicar_motor_comisiones, requiere_access_para_venta,
+                              normalizar_canal)
 from tx_mensual import (numero_tx, preparar_periodos_ventas, unir_historial_ventas,
                         periodo_fila, registro_periodo, aplicar_historial, estado_historial,
                         validar_periodo_r34, PeriodoR34Requerido)
@@ -3575,6 +3576,21 @@ def _crear_xml_ventas_actualizado(
     return _serializar(raiz, xml_original)
 
 
+def estandarizar_textos_salida(final):
+    """Solo texto visible; no modifica el resultado de cálculo ni sus metadatos."""
+    salida = final.copy(deep=False)
+    originales = final.attrs.get('encabezados_comisiones', {})
+    for c in final:
+        if str(c).startswith('__'):
+            continue
+        nombre = normalizar_nombre_columna(originales.get(c, c))
+        if nombre == 'EQUIPO':
+            salida[c] = final[c].map(lambda v: estandarizar_equipo(v, conservar_desconocidos=True))
+        elif nombre in {'CANAL', 'VENDEDOR AGENTE AUTORIZADO'}:
+            salida[c] = final[c].map(lambda v: normalizar_canal(v, conservar_desconocidos=True))
+    return salida
+
+
 def generar_excel_resultado(
     resultados
 ):
@@ -3601,9 +3617,7 @@ def generar_excel_resultado(
         HOJA_COMISIONES
     )
 
-    final = resultados[
-        "final"
-    ]
+    final = estandarizar_textos_salida(resultados['final'])
 
     cantidad_original = int(
         resultados[
