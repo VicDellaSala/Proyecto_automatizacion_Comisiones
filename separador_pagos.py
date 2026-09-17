@@ -5,7 +5,7 @@ puedan quedar rotas al quitar columnas/filas. El viernes solo nombra archivos.
 """
 from collections import Counter
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
@@ -34,6 +34,15 @@ PARES = {
 ACCESS = ('REGISTRO DE OPERADORES', 'REGISTROS DE OPERADORES ACCESS',
           'REGISTRO DE OPERADORES ACCESS', 'REGISTRO DE OPERADORES ACCESS COMERCES',
           'REGISTRO DE OPERADORES ACCESS COMMERCE', 'ACCESS COMMERCE', 'ACCESS COMERCE')
+BASE_SALIDA = ('FECHA DE PAGO', 'ESTATUS', 'OBSERVACION', 'MES DE CIERRE',
+               'FECHA DE SOLICITUD RECIBIDA', 'CANAL', 'AFILIADO', 'TERMINAL',
+               'FECHA', 'VENDEDOR', 'EQUIPO', 'MONTO TOTAL $', 'MONTO TOTAL BS',
+               'MONTO ESTIMADO DE FACT $', 'ESQUEMA COMERCIAL', 'OPERADORA',
+               'BANCO', 'RAZON SOCIAL', 'RIF', 'TLF', 'DIRECCION',
+               'REPRESENTANTE LEGAL', 'CORREO', 'ESTATUS CXC', JORNADA)
+COLUMNAS_REVISION = ('CANAL', 'VENDEDOR / FREELANCE', 'MONTO COMISION VENDEDOR/FREELANCE $',
+                     'AFILIADO', 'TERMINAL', 'BANCO', 'EQUIPO', 'FECHA')
+AVISO_REGIONAL = 'Filas con comisión regional sin destinatario inequívoco'
 NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
 
 
@@ -93,6 +102,7 @@ class ResultadoPagos:
     nombre_zip: str
     resumen: list
     advertencias: dict
+    casos_regionales_por_revisar: list = field(default_factory=list, repr=False)
 
     @property
     def archivos_generados(self):
@@ -113,17 +123,30 @@ def _columnas(celdas):
     access = [i for i, n in enumerate(nombres) if n in {encabezado(a) for a in ACCESS}]
     if not access:
         raise ErrorSeparador('Falta REGISTRO DE OPERADORES o ACCESS COMMERCE en VENTAS.')
-    quitar = {i for i, n in enumerate(nombres) if n in {'SERIAL', 'CONCATENAR', 'FECHA DE ARCHIVO',
-              'MONTO TOTAL A PAGAR $'} or n.startswith('__')}
-    fechas = posiciones.get('FECHA DE PAGO', [])
-    quitar.update(fechas[1:])
-    inicio, fin = posiciones.get('NUM DE CUENTA', []), posiciones.get('TOTAL DE VENTAS ESTIMADO EN $', [])
-    if inicio or fin:
-        if len(inicio) != 1 or len(fin) != 1 or inicio[0] > fin[0]:
-            raise ErrorSeparador('El bloque NUM DE CUENTA / TOTAL DE VENTAS ESTIMADO no es inequívoco.')
-        quitar.update(range(inicio[0], fin[0] + 1))
-    quitar.update(access[1:])
-    return nombres, posiciones, access, quitar
+    return nombres, posiciones, access
+
+
+def _estructura_salida(posiciones, access):
+    """Lista permitida: ninguna columna adicional del maestro llega al Excel."""
+    seleccion = {}
+    for nombre in (*BASE_SALIDA, *[n for par in PARES.values() for n in par], 'CON TX'):
+        candidatas = posiciones.get(encabezado(nombre), [])
+        if len(candidatas) > 1:
+            if nombre in ('FECHA DE PAGO', 'OBSERVACION'):
+                candidatas = candidatas[:1]  # principal inicial, no la administrativa
+            elif nombre == 'AFILIADO':
+                # El afiliado operativo está entre CANAL y TERMINAL, no en el
+                # bloque auxiliar inicial. No se decide por el sufijo de pandas.
+                terminales = posiciones.get('TERMINAL', [])
+                candidatas = [i for i in candidatas if len(terminales) == 1
+                              and posiciones['CANAL'][0] < i < terminales[0]]
+            if len(candidatas) != 1:
+                raise ErrorSeparador(f'No se puede identificar inequívocamente la columna de salida {nombre}.')
+        if candidatas:
+            seleccion[nombre] = candidatas[0]
+    seleccion['ACCESS COMMERCE'] = access[0]
+    faltantes = [n for n in (*BASE_SALIDA, 'CON TX') if n not in seleccion]
+    return seleccion, faltantes
 
 
 def _metadatos(datos, ruta):
@@ -194,7 +217,7 @@ def _copiar_celda(origen, destino, estilos):
         destino.data_type = 's'
 
 
-def _excel(fuente, cabecera, filas, indices, indice_access, indice_monto, meta):
+def _excel(fuente, cabecera, filas, columnas, indice_access, indice_monto, meta):
     w = Workbook()
     w.epoch = fuente.epoch
     w.loaded_theme = fuente.loaded_theme
@@ -206,10 +229,10 @@ def _excel(fuente, cabecera, filas, indices, indice_access, indice_monto, meta):
         for atributo in ('defaultColWidth', 'defaultRowHeight', 'baseColWidth'):
             if atributo in formato:
                 setattr(s.sheet_format, atributo, float(formato[atributo]) if atributo != 'baseColWidth' else int(formato[atributo]))
-    for nueva, vieja in enumerate(indices, 1):
+    indices = list(columnas.values())
+    for nueva, (nombre, vieja) in enumerate(columnas.items(), 1):
         _copiar_celda(cabecera[vieja], s.cell(1, nueva), estilos)
-        if vieja == indice_access:
-            s.cell(1, nueva, 'ACCESS COMMERCE')
+        s.cell(1, nueva, nombre)
         for ancho in anchos:
             if int(ancho['min']) <= vieja + 1 <= int(ancho['max']):
                 d = s.column_dimensions[get_column_letter(nueva)]
@@ -269,18 +292,22 @@ def separar_pagos(datos, hoy=None):
                 break
         if cabecera is None:
             raise ErrorSeparador('No se encontraron encabezados CANAL y EQUIPO en VENTAS.')
-        nombres, posiciones, access, quitar = _columnas(cabecera)
+        nombres, posiciones, access = _columnas(cabecera)
+        seleccion, faltantes = _estructura_salida(posiciones, access)
         columnas_grupo = {}
         for grupo in GRUPOS:
-            quitar_grupo = quitar | {posiciones[encabezado(n)][0] for g, par in PARES.items() if g != grupo for n in par}
-            columnas_grupo[grupo] = [i for i in range(len(nombres)) if i not in quitar_grupo]
+            permitidas = (*BASE_SALIDA, *PARES[grupo], 'CON TX', 'ACCESS COMMERCE')
+            columnas_grupo[grupo] = {n: seleccion[n] for n in permitidas if n in seleccion}
         meta = _metadatos(datos, s._worksheet_path)
-        incluidos = set().union(*map(set, columnas_grupo.values()))
+        incluidos = set(seleccion.values())
         # Una fórmula sin resultado guardado no se convierte silenciosamente en un vacío.
         if any(column_index_from_string(re.match(r'[A-Z]+', c)[0]) - 1 in incluidos for c in meta[2]):
             raise ErrorSeparador('Hay fórmulas sin resultado guardado en columnas de salida. Abra y guarde el Excel con los cálculos actualizados antes de separarlo.')
         grupos = {(g, n): [] for g, lista in GRUPOS.items() for n in lista}
         avisos = Counter()
+        casos_regionales = []
+        if faltantes:
+            avisos['Columnas solicitadas ausentes del input (no se crean): ' + ', '.join(faltantes)] = len(faltantes)
         fila_cabecera = next(c.row for c in cabecera if c.value is not None)
         for numero, celdas in enumerate(s.iter_rows(min_row=fila_cabecera + 1, max_col=len(nombres)), fila_cabecera + 1):
             fila = {n: celdas[ix[0]].value for n, ix in posiciones.items()}
@@ -290,7 +317,11 @@ def separar_pagos(datos, hoy=None):
             # La regla compartida espera los nombres canónicos con sus espacios.
             evidencia = {n: fila.get(encabezado(n)) for n in ('EQUIPO', 'BANCO', 'VENDEDOR', JORNADA)}
             visible = access_visible(evidencia, [celdas[i].value for i in access])
-            for destino in _destinos(fila, avisos):
+            pendientes_antes = avisos[AVISO_REGIONAL]
+            destinos = _destinos(fila, avisos)
+            if avisos[AVISO_REGIONAL] > pendientes_antes:
+                casos_regionales.append({n: celdas[seleccion[n]].value for n in COLUMNAS_REVISION if n in seleccion})
+            for destino in destinos:
                 grupos[destino].append((numero, celdas, visible))
         fecha = viernes_misma_semana(hoy).strftime('%d-%m-%Y')
         contenido, resumen = BytesIO(), []
@@ -301,6 +332,6 @@ def separar_pagos(datos, hoy=None):
                     indice_monto = posiciones[encabezado(PARES[grupo][1])][0]
                     excel = _excel(w, cabecera, filas, columnas_grupo[grupo], access[0], indice_monto, meta)
                     z.writestr(f'Pago de comisiones {nombre} {fecha}.xlsx', excel)
-        return ResultadoPagos(contenido.getvalue(), f'Pagos de comisiones {fecha}.zip', resumen, dict(avisos))
+        return ResultadoPagos(contenido.getvalue(), f'Pagos de comisiones {fecha}.zip', resumen, dict(avisos), casos_regionales)
     finally:
         w.close()

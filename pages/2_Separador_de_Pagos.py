@@ -3,7 +3,7 @@ import hashlib
 
 import streamlit as st
 
-from separador_pagos import ErrorSeparador, GRUPOS, separar_pagos, viernes_misma_semana
+from separador_pagos import AVISO_REGIONAL, ErrorSeparador, GRUPOS, separar_pagos, viernes_misma_semana
 
 
 st.set_page_config(page_title='Separador de Pagos', page_icon='📁', layout='wide')
@@ -19,7 +19,7 @@ if archivo is None:
     st.session_state.pop('pagos_resultado', None)
 else:
     datos = archivo.getvalue()
-    clave = (hashlib.sha256(datos).hexdigest(), fecha.isoformat())
+    clave = (hashlib.sha256(datos).hexdigest(), fecha.isoformat(), 'columnas-permitidas-29')
     guardado = st.session_state.get('pagos_resultado')
     if guardado and guardado[0] != clave:
         st.session_state.pop('pagos_resultado', None)
@@ -42,6 +42,9 @@ else:
                           for r in resultado.resumen if r['Grupo'] == grupo], hide_index=True, use_container_width=True)
         for motivo, cantidad in resultado.advertencias.items():
             st.warning(f'{motivo}: {cantidad}. Revise estos casos antes de distribuir los pagos.')
+            if motivo == AVISO_REGIONAL and resultado.casos_regionales_por_revisar:
+                st.subheader('CASOS REGIONALES POR REVISAR')
+                st.dataframe(resultado.casos_regionales_por_revisar, hide_index=True, use_container_width=True)
         st.metric('Total de archivos generados', resultado.archivos_generados)
         if resultado.archivos_generados:
             st.download_button('Descargar todos los pagos (ZIP)', resultado.contenido_zip,

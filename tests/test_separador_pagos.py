@@ -25,6 +25,9 @@ HEADERS = ['SERIAL', 'CONCATENAR', 'FECHA DE PAGO', 'ESTATUS', 'OBSERVACION',
            p.JORNADA, *p.PARES['BANCOS'], *p.PARES['REGIONALES'], *p.PARES['AGENTES AUTORIZADOS'],
            'MONTO TOTAL A PAGAR $', 'CON TX', 'MONTO TX AGOSTO',
            'REGISTRO DE OPERADORES', 'REGISTROS DE OPERADORES ACCESS', '__ROW_ID']
+# Estructura completa ficticia, con columnas inesperadas y duplicados del maestro.
+HEADERS += [n for n in p.BASE_SALIDA if n not in HEADERS]
+HEADERS += [0, 'OBSERVACION.1', 'COLUMNA FUTURA NO PERMITIDA', 'MONTO TX OCTUBRE', ' monto tx diciembre ']
 
 
 def fila(**cambios):
@@ -148,7 +151,7 @@ class SeparadorPagosTests(unittest.TestCase):
         v = valores(salida(libros, 'REGION ORIENTE'))
         self.assertEqual(len(v), 3)
         self.assertEqual([r['ESTATUS'] for r in v], ['PAGADO', 'DESINSTALADO', 'Pendiente'])
-        self.assertTrue(all(r['MONTO TX AGOSTO'] == 1501 for r in v))
+        self.assertTrue(all(r['CON TX'] == 'CON_TX' and r['OBSERVACION'] == 'HISTORICA' for r in v))
 
     def test_regionales_independientes_del_canal(self):
         filas = [fila(CANAL=c, **{'VENDEDOR / FREELANCE': p.REGIONALES[0], 'MONTO COMISION VENDEDOR/FREELANCE $': 10}) for c in ('CREDICARDPOS', 'REGION ORIENTE')]
@@ -162,6 +165,8 @@ class SeparadorPagosTests(unittest.TestCase):
         r, libros = salidas(libro(filas))
         self.assertEqual(len(valores(salida(libros, p.REGIONALES[0]))), 1)
         self.assertEqual(r.advertencias['Filas con comisión regional sin destinatario inequívoco'], 2)
+        self.assertEqual([c['VENDEDOR / FREELANCE'] for c in r.casos_regionales_por_revisar],
+                         [f['VENDEDOR / FREELANCE'] for f in filas[1:]])
         self.assertEqual(r.archivos_generados, 1)
         self.assertEqual(valores(salida(libros, p.REGIONALES[0]))[0]['VENDEDOR / FREELANCE'],
                          p.REGIONALES[0] + '/Persona Ficticia')
@@ -231,7 +236,12 @@ class SeparadorPagosTests(unittest.TestCase):
             for g, par in p.PARES.items():
                 for c in par:
                     self.assertEqual(c in h, g == grupo)
-            self.assertEqual([HEADERS.index(c) for c in h if c != 'ACCESS COMMERCE'], sorted(HEADERS.index(c) for c in h if c != 'ACCESS COMMERCE'))
+            self.assertEqual(h, [*p.BASE_SALIDA, *p.PARES[grupo], 'CON TX', 'ACCESS COMMERCE'])
+            self.assertEqual(len(h), 29)
+            self.assertEqual(h.count('OBSERVACION'), 1)
+            self.assertNotIn(0, h)
+            self.assertNotIn('COLUMNA FUTURA NO PERMITIDA', h)
+            self.assertFalse(any(p.encabezado(c).startswith('MONTO TX ') for c in h))
 
     def test_formato_celdas_dimensiones_y_filtro(self):
         datos = libro([fila(), fila()])
@@ -239,7 +249,7 @@ class SeparadorPagosTests(unittest.TestCase):
         _, libros = salidas(datos)
         s = salida(libros, 'REGION ORIENTE')
         h = [c.value for c in s[1]]
-        for nombre in ['ESTATUS', 'FECHA', 'MONTO TX AGOSTO']:
+        for nombre in ['ESTATUS', 'FECHA', 'MONTO COMISION AGENTE AUTORIZADO $']:
             a, b = HEADERS.index(nombre) + 1, h.index(nombre) + 1
             for r in (1, 2, 3):
                 for atributo in ('font', 'fill', 'border', 'alignment', 'number_format'):
@@ -272,9 +282,85 @@ class SeparadorPagosTests(unittest.TestCase):
             with self.assertRaises(p.ErrorSeparador):
                 p.separar_pagos(datos)
 
-    def test_bloque_incompleto_se_bloquea(self):
-        with self.assertRaises(p.ErrorSeparador):
-            p.separar_pagos(libro([fila()], headers=[h for h in HEADERS if h != 'TOTAL VENTA ESTIMADO $$']))
+    def test_bloque_incompleto_tampoco_se_exporta(self):
+        _, libros = salidas(libro([fila()], headers=[h for h in HEADERS if h != 'TOTAL VENTA ESTIMADO $$']))
+        h = [c.value for c in salida(libros, 'REGION ORIENTE')[1]]
+        self.assertEqual(len(h), 29)
+        self.assertNotIn('NUMERO DE CUENTA', h)
+        self.assertNotIn('GARANTIA DE POS', h)
+
+    def test_columnas_solicitadas_ausentes_se_advierten_sin_inventarlas(self):
+        r, libros = salidas(libro([fila()], headers=[h for h in HEADERS if h != 'TLF']))
+        self.assertNotIn('TLF', [c.value for c in salida(libros, 'REGION ORIENTE')[1]])
+        self.assertEqual(salida(libros, 'REGION ORIENTE').max_column, 28)
+        self.assertTrue(any('TLF' in aviso for aviso in r.advertencias))
+
+    def test_pendientes_solo_desconocidos_con_comision_y_texto_original(self):
+        texto = '  Persona No Reconocida / Otra Persona Ficticia  '
+        filas = [fila(CANAL='CREDICARDPOS', **{'VENDEDOR / FREELANCE': n,
+                 'MONTO COMISION VENDEDOR/FREELANCE $': m})
+                 for n, m in [(texto, 10), (p.REGIONALES[0], 10), ('Otro desconocido', 0)]]
+        r, libros = salidas(libro(filas))
+        self.assertEqual(r.advertencias[p.AVISO_REGIONAL], 1)
+        self.assertEqual(len(r.casos_regionales_por_revisar), 1)
+        pendiente = r.casos_regionales_por_revisar[0]
+        self.assertEqual(list(pendiente), list(p.COLUMNAS_REVISION))
+        self.assertEqual(pendiente['VENDEDOR / FREELANCE'], texto)
+        self.assertEqual(pendiente['MONTO COMISION VENDEDOR/FREELANCE $'], 10)
+        self.assertEqual(r.archivos_generados, 1)
+        self.assertEqual(len(valores(salida(libros, p.REGIONALES[0]))), 1)
+        zip_original = r.contenido_zip
+        r.casos_regionales_por_revisar.clear()
+        self.assertEqual(r.contenido_zip, zip_original)
+        self.assertNotIn(texto, repr(r))
+
+    def test_fecha_observacion_principales_y_afiliado_operativo_por_contexto(self):
+        headers = HEADERS.copy()
+        headers.insert(0, 'AFILIADO.1')
+        row = fila(**{'AFILIADO.1': 'AUXILIAR FICTICIO', 'OBSERVACION.1': 'NOTA ADMINISTRATIVA'})
+        w = load_workbook(BytesIO(libro([row], headers=headers)))
+        s = w['VENTAS']
+        fechas = [c.column for c in s[1] if c.value == 'FECHA DE PAGO']
+        s.cell(2, fechas[1], date(2026, 12, 31))
+        b = BytesIO()
+        w.save(b)
+        _, libros = salidas(b.getvalue())
+        r = valores(salida(libros, 'REGION ORIENTE'))[0]
+        self.assertEqual(r['AFILIADO'], '00001234')
+        self.assertEqual(r['OBSERVACION'], 'HISTORICA')
+        self.assertEqual(r['FECHA DE PAGO'].date(), date(2026, 1, 5))
+
+    def test_afiliados_duplicados_sin_contexto_inequivoco_se_bloquean(self):
+        headers = HEADERS.copy()
+        headers.insert(headers.index('TERMINAL'), 'AFILIADO.1')
+        with self.assertRaisesRegex(p.ErrorSeparador, 'AFILIADO'):
+            p.separar_pagos(libro([fila()], headers=headers))
+
+    @unittest.skipIf(AppTest is None, 'Requiere Streamlit instalado para probar la interfaz.')
+    def test_streamlit_tabla_de_pendientes_solo_debajo_del_aviso(self):
+        at = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app.py'), default_timeout=30).run()
+        texto = '  Persona Ficticia / Nombre No Reconocido  '
+        datos = libro([fila(**{'VENDEDOR / FREELANCE': texto, 'MONTO COMISION VENDEDOR/FREELANCE $': 10})])
+        with patch('streamlit.file_uploader', return_value=BytesIO(datos)):
+            at.switch_page('pages/2_Separador_de_Pagos.py').run()
+            at.button[0].click().run()
+            self.assertFalse(at.exception)
+            self.assertEqual(len(at.warning), 1)
+            self.assertEqual(at.subheader[-1].value, 'CASOS REGIONALES POR REVISAR')
+            self.assertEqual(at.dataframe[-1].value.iloc[0]['VENDEDOR / FREELANCE'], texto)
+            self.assertEqual(list(at.dataframe[-1].value.columns), list(p.COLUMNAS_REVISION))
+            elementos = [e.type for e in at.main if e.type in ('warning', 'subheader', 'dataframe')]
+            posicion = elementos.index('warning')
+            self.assertEqual(elementos[posicion:posicion+3], ['warning', 'subheader', 'dataframe'])
+            self.assertEqual(at.metric[0].value, '1')
+            self.assertEqual(len(at.get('download_button')), 1)
+        with patch('streamlit.file_uploader', return_value=BytesIO(libro([fila()]))):
+            at.run()
+            at.button[0].click().run()
+            self.assertFalse(at.exception)
+            self.assertFalse(at.warning)
+            self.assertNotIn('CASOS REGIONALES POR REVISAR', [s.value for s in at.subheader])
+            self.assertEqual(len(at.dataframe), 3)
 
     def test_variantes_encabezados_y_columnas_movidas(self):
         h = HEADERS.copy()
