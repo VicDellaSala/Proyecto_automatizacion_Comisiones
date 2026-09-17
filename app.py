@@ -20,6 +20,9 @@ st.set_page_config(
     layout="wide",
 )
 
+st.sidebar.page_link("app.py", label="Procesamiento de Comisiones")
+st.sidebar.page_link("pages/2_Separador_de_Pagos.py", label="Separador de Pagos")
+
 
 # =========================================================
 # LIMPIAR RESULTADOS DE VERSIONES ANTERIORES
