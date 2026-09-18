@@ -229,8 +229,8 @@ def _excel(fuente, cabecera, filas, columnas, indice_access, indice_monto, meta)
         for atributo in ('defaultColWidth', 'defaultRowHeight', 'baseColWidth'):
             if atributo in formato:
                 setattr(s.sheet_format, atributo, float(formato[atributo]) if atributo != 'baseColWidth' else int(formato[atributo]))
-    indices = list(columnas.values())
-    for nueva, (nombre, vieja) in enumerate(columnas.items(), 1):
+    indices = [indice for _, indice in columnas]
+    for nueva, (nombre, vieja) in enumerate(columnas, 1):
         _copiar_celda(cabecera[vieja], s.cell(1, nueva), estilos)
         s.cell(1, nueva, nombre)
         for ancho in anchos:
@@ -294,12 +294,20 @@ def separar_pagos(datos, hoy=None):
             raise ErrorSeparador('No se encontraron encabezados CANAL y EQUIPO en VENTAS.')
         nombres, posiciones, access = _columnas(cabecera)
         seleccion, faltantes = _estructura_salida(posiciones, access)
+        seriales_conservados = posiciones.get('SERIAL', [])[1:]
         columnas_grupo = {}
         for grupo in GRUPOS:
             permitidas = (*BASE_SALIDA, *PARES[grupo], 'CON TX', 'ACCESS COMMERCE')
-            columnas_grupo[grupo] = {n: seleccion[n] for n in permitidas if n in seleccion}
+            columnas = [(n, seleccion[n]) for n in permitidas if n in seleccion]
+            # Solo se excluye la primera aparición. Una lista permite conservar
+            # todos los SERIAL posteriores sin colapsar encabezados repetidos.
+            for indice in seriales_conservados:
+                lugar = max(((origen, i + 1) for i, (_, origen) in enumerate(columnas)
+                             if origen < indice), default=(-1, 0))[1]
+                columnas.insert(lugar, ('SERIAL', indice))
+            columnas_grupo[grupo] = columnas
         meta = _metadatos(datos, s._worksheet_path)
-        incluidos = set(seleccion.values())
+        incluidos = set(seleccion.values()) | set(seriales_conservados)
         # Una fórmula sin resultado guardado no se convierte silenciosamente en un vacío.
         if any(column_index_from_string(re.match(r'[A-Z]+', c)[0]) - 1 in incluidos for c in meta[2]):
             raise ErrorSeparador('Hay fórmulas sin resultado guardado en columnas de salida. Abra y guarde el Excel con los cálculos actualizados antes de separarlo.')

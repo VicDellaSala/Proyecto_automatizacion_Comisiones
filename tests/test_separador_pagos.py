@@ -230,14 +230,15 @@ class SeparadorPagosTests(unittest.TestCase):
             s = salida(libros, nombre)
             h = [c.value for c in s[1]]
             self.assertEqual(h.count('FECHA DE PAGO'), 1)
-            for prohibido in ['SERIAL', 'SERIAL.1', 'CONCATENAR', 'CONCATENAR.1', 'FECHA DE ARCHIVO', 'NUMERO DE CUENTA',
+            for prohibido in ['SERIAL.1', 'CONCATENAR', 'CONCATENAR.1', 'FECHA DE ARCHIVO', 'NUMERO DE CUENTA',
                                'GARANTIA DE POS', 'TOTAL VENTA ESTIMADO $$', 'MONTO TOTAL A PAGAR $', '__ROW_ID']:
                 self.assertNotIn(prohibido, h)
             for g, par in p.PARES.items():
                 for c in par:
                     self.assertEqual(c in h, g == grupo)
-            self.assertEqual(h, [*p.BASE_SALIDA, *p.PARES[grupo], 'CON TX', 'ACCESS COMMERCE'])
-            self.assertEqual(len(h), 29)
+            self.assertEqual([n for n in h if n != 'SERIAL'], [*p.BASE_SALIDA, *p.PARES[grupo], 'CON TX', 'ACCESS COMMERCE'])
+            self.assertEqual(h.count('SERIAL'), 1)
+            self.assertEqual(len(h), 30)
             self.assertEqual(h.count('OBSERVACION'), 1)
             self.assertNotIn(0, h)
             self.assertNotIn('COLUMNA FUTURA NO PERMITIDA', h)
@@ -285,15 +286,62 @@ class SeparadorPagosTests(unittest.TestCase):
     def test_bloque_incompleto_tampoco_se_exporta(self):
         _, libros = salidas(libro([fila()], headers=[h for h in HEADERS if h != 'TOTAL VENTA ESTIMADO $$']))
         h = [c.value for c in salida(libros, 'REGION ORIENTE')[1]]
-        self.assertEqual(len(h), 29)
+        self.assertEqual(len(h), 30)
         self.assertNotIn('NUMERO DE CUENTA', h)
         self.assertNotIn('GARANTIA DE POS', h)
 
     def test_columnas_solicitadas_ausentes_se_advierten_sin_inventarlas(self):
         r, libros = salidas(libro([fila()], headers=[h for h in HEADERS if h != 'TLF']))
         self.assertNotIn('TLF', [c.value for c in salida(libros, 'REGION ORIENTE')[1]])
-        self.assertEqual(salida(libros, 'REGION ORIENTE').max_column, 28)
+        self.assertEqual(salida(libros, 'REGION ORIENTE').max_column, 29)
         self.assertTrue(any('TLF' in aviso for aviso in r.advertencias))
+
+    def test_segundo_serial_conserva_posicion_valor_y_formato_en_tres_grupos(self):
+        headers = [h for h in HEADERS if p.encabezado(h) != 'SERIAL']
+        headers.insert(headers.index('AFILIADO'), ' serial ')
+        headers.insert(headers.index('ESTATUS CXC') + 1, 'SERIAL')
+        row = fila(**{' serial ': 'PRIMERO FICTICIO A EXCLUIR', 'SERIAL': '000123456789012',
+                     'VENDEDOR BANCO': 'TESORO', 'MONTO COMISION BANCO $': 10,
+                     'VENDEDOR / FREELANCE': p.REGIONALES[0], 'MONTO COMISION VENDEDOR/FREELANCE $': 10})
+        datos = libro([row], headers=headers)
+        original = load_workbook(BytesIO(datos))['VENTAS']
+        origen = original.cell(2, headers.index('SERIAL') + 1)
+        _, libros = salidas(datos)
+        for nombre in ('REGION ORIENTE', p.REGIONALES[0], 'TESORO'):
+            with self.subTest(beneficiario=nombre):
+                s = salida(libros, nombre)
+                h = [c.value for c in s[1]]
+                self.assertEqual(h.count('SERIAL'), 1)
+                self.assertEqual(h.index('SERIAL'), h.index('ESTATUS CXC') + 1)
+                destino = s.cell(2, h.index('SERIAL') + 1)
+                self.assertEqual(destino.value, '000123456789012')
+                self.assertEqual(destino.data_type, 's')
+                for atributo in ('font', 'fill', 'border', 'alignment', 'number_format'):
+                    self.assertEqual(copy(getattr(origen, atributo)), copy(getattr(destino, atributo)))
+                    self.assertEqual(copy(getattr(original.cell(1, origen.column), atributo)),
+                                     copy(getattr(s.cell(1, destino.column), atributo)))
+                self.assertEqual(original.column_dimensions[origen.column_letter].width,
+                                 s.column_dimensions[destino.column_letter].width)
+                self.assertNotIn('PRIMERO FICTICIO A EXCLUIR', [c.value for c in s[2]])
+
+    def test_cero_uno_y_mas_de_dos_seriales_solo_excluye_el_primero(self):
+        base = [h for h in HEADERS if p.encabezado(h) != 'SERIAL']
+        for cantidad in (0, 1, 3):
+            with self.subTest(cantidad=cantidad):
+                headers = base.copy()
+                lugar = headers.index('EQUIPO') + 1
+                headers[lugar:lugar] = ['SERIAL'] * cantidad
+                w = load_workbook(BytesIO(libro([fila()], headers=headers)))
+                for indice in range(cantidad):
+                    w['VENTAS'].cell(2, lugar + indice + 1, f'000{indice}123456789')
+                b = BytesIO()
+                w.save(b)
+                _, libros = salidas(b.getvalue())
+                s = salida(libros, 'REGION ORIENTE')
+                columnas = [c.column for c in s[1] if c.value == 'SERIAL']
+                self.assertEqual(len(columnas), max(0, cantidad - 1))
+                self.assertEqual([s.cell(2, c).value for c in columnas],
+                                 [f'000{i}123456789' for i in range(1, cantidad)])
 
     def test_pendientes_solo_desconocidos_con_comision_y_texto_original(self):
         texto = '  Persona No Reconocida / Otra Persona Ficticia  '
