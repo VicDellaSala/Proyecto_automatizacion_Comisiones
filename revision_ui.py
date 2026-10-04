@@ -21,7 +21,7 @@ def mostrar_revision(resultados, precios):
     cambios_sin_aplicar = False
     for paso in (1, 2, 3):
         grupos_mostrados = set()
-        st.subheader(f'PASO {paso} DE 3 — {titulos[paso]}')
+        st.subheader(f'PASO {paso} DE 4 — {titulos[paso]}')
         if not casos[paso]:
             st.success(vacios[paso])
         for caso in casos[paso]:
@@ -79,4 +79,6 @@ def mostrar_revision(resultados, precios):
                         st.session_state['revision_nuevas'] = estado_nuevo
                         st.session_state.pop('excel_final_generado', None)
                         st.rerun()
-    return cambios_sin_aplicar
+    from revision_terminales_ui import mostrar_terminales
+    terminales_sin_aplicar = mostrar_terminales(resultados, estado, precios)
+    return cambios_sin_aplicar or terminales_sin_aplicar
