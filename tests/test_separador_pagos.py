@@ -136,11 +136,11 @@ class SeparadorPagosTests(unittest.TestCase):
             self.assertEqual(p.viernes_misma_semana(date(2026, 9, dia)), date(2026, 9, 18))
         self.assertEqual(p.viernes_misma_semana(date(2026, 12, 31)), date(2027, 1, 1))
 
-    def test_aliases_y_once_agentes_sin_filtro_de_importe(self):
+    def test_aliases_y_doce_agentes_sin_filtro_de_importe(self):
         aliases = ['CENTRO', 'ORIENTE', 'OCCIDENTE', 'CENTRO TIPO II', 'CREDICARDPOSGRANPRO',
-                   'MULTITIENDA', 'INVERSIONES TPOS', 'POSMARACAY26', 'POSMGTA25 CA', 'VENEPOS', 'VIRTUALNET']
+                   'MULTITIENDA', 'INVERSIONES TPOS', 'POSMARACAY26', 'POSMGTA25 CA', 'VENEPOS', 'VIRTUALNET', 'POSGUAYANA 26']
         r, libros = salidas(libro([fila(CANAL=a, **{'MONTO COMISION AGENTE AUTORIZADO $': None}) for a in aliases]))
-        self.assertEqual(r.archivos_generados, 11)
+        self.assertEqual(r.archivos_generados, 12)
         for a in p.AGENTES:
             self.assertEqual(len(valores(salida(libros, a))), 1)
             self.assertIsNone(valores(salida(libros, a))[0]['MONTO COMISION AGENTE AUTORIZADO $'])
@@ -259,12 +259,12 @@ class SeparadorPagosTests(unittest.TestCase):
         self.assertEqual([s.row_dimensions[r].height for r in (1, 2, 3)], [38, 27, 28])
         self.assertTrue(s.auto_filter.ref.endswith('3'))
 
-    def test_zip_plano_una_hoja_18_beneficiarios(self):
+    def test_zip_plano_una_hoja_19_beneficiarios(self):
         filas = [fila(CANAL=a) for a in p.AGENTES]
         filas += [fila(CANAL='CREDICARDPOS', **{'VENDEDOR / FREELANCE': n, 'MONTO COMISION VENDEDOR/FREELANCE $': 10}) for n in p.REGIONALES]
         filas += [fila(CANAL='CREDICARDPOS', **{'VENDEDOR BANCO': b, 'MONTO COMISION BANCO $': 10}) for b in p.BANCOS]
         r, libros = salidas(libro(filas))
-        self.assertEqual(r.archivos_generados, 18)
+        self.assertEqual(r.archivos_generados, 19)
         self.assertEqual(r.nombre_zip, 'Pagos de comisiones 18-09-2026.zip')
         for nombre, w in libros.items():
             self.assertNotIn('/', nombre)
@@ -272,7 +272,7 @@ class SeparadorPagosTests(unittest.TestCase):
 
     def test_ceros_resumen_sin_excel_vacio(self):
         r, libros = salidas(libro([fila(CANAL='CREDICARDPOS')]))
-        self.assertEqual(len(r.resumen), 18)
+        self.assertEqual(len(r.resumen), 19)
         self.assertEqual(r.archivos_generados, 0)
         self.assertFalse(libros)
 

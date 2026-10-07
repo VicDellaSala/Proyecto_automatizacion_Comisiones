@@ -21,7 +21,7 @@ from reglas_comisiones import normalizar_canal, normalizar_texto, requiere_acces
 
 
 AGENTES = ('REGION CENTRO', 'REGION ORIENTE', 'REGION OCCIDENTE', 'CENTRO TIPO II',
-           'GRANPRO', 'MULTITIENDA', 'INV TPOS', 'POSMARACAY', 'POSMGTA', 'VENEPOS', 'VIRTUALNET')
+           'GRANPRO', 'MULTITIENDA', 'INV TPOS', 'POSMARACAY', 'POSMGTA', 'VENEPOS', 'VIRTUALNET', 'POSGUAYANA')
 REGIONALES = ('Alexander Pacheco', 'Ezequiel Zambrano', 'Luis Garcia', 'Liseth Villanueva', 'Jorge Milanes')
 BANCOS = ('TESORO', 'BANCARIBE')
 GRUPOS = {'AGENTES AUTORIZADOS': AGENTES, 'REGIONALES': REGIONALES, 'BANCOS': BANCOS}
