@@ -3602,7 +3602,7 @@ def generar_excel_resultado(
     El XLSX es un ZIP. Esta función:
     1. parte de los bytes del mismo archivo original;
     2. copia todas las partes/hojas sin cargarlas completas;
-    3. modifica solamente el XML de la hoja VENTAS;
+    3. actualiza VENTAS y elimina la caché de celdas de libros externos;
     4. conserva las demás hojas, vínculos, estilos y objetos.
 
     Esto evita descomprimir en RAM vínculos externos gigantes
@@ -3693,6 +3693,12 @@ def generar_excel_resultado(
             ) as zip_salida:
 
                 for info in zip_entrada.infolist():
+
+                    if re.fullmatch(r'xl/externalLinks/[^/]+\.xml', info.filename):
+                        from exportacion_ligera import copiar_vinculo_sin_cache
+                        with zip_entrada.open(info) as origen, zip_salida.open(info, 'w') as destino:
+                            copiar_vinculo_sin_cache(origen, destino)
+                        continue
 
                     if info.filename == 'xl/styles.xml' and estilos_nuevos is not None:
                         zip_salida.writestr(info, estilos_nuevos)
