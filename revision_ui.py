@@ -22,6 +22,9 @@ def mostrar_revision(resultados, precios):
     for paso in (1, 2, 3):
         grupos_mostrados = set()
         st.subheader(f'PASO {paso} DE 4 — {titulos[paso]}')
+        if paso == 3:
+            from jornadas_chats_ui import mostrar_chats
+            cambios_sin_aplicar = mostrar_chats(resultados, estado, precios) or cambios_sin_aplicar
         if not casos[paso]:
             st.success(vacios[paso])
         for caso in casos[paso]:
