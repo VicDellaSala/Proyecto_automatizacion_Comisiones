@@ -19,16 +19,16 @@ class PosguayanaTests(unittest.TestCase):
         return r.calcular_comision(**datos)
 
     def test_aliases_exactos_y_no_aproximados(self):
-        for canal in ('POSGUAYANA', 'POSGUAYANA 26'):
-            self.assertEqual(r.normalizar_agente(canal), 'POSGUAYANA')
-            self.assertEqual(r.normalizar_canal(canal), 'POSGUAYANA')
-        for canal in ('POSGUAYANA26', 'POSGUAYANA 27', 'OTRO POSGUAYANA', 'POSGUAYANA 26 CA'):
+        for canal in ('POSGUAYANA', 'POSGUAYANA 26', 'POSGUAYANA26', 'PosGuayana26'):
+            self.assertEqual(r.normalizar_agente(canal), 'PosGuayana26')
+            self.assertEqual(r.normalizar_canal(canal), 'PosGuayana26')
+        for canal in ('POSGUAYANA 27', 'OTRO POSGUAYANA', 'POSGUAYANA 26 CA'):
             self.assertIsNone(r.normalizar_agente(canal))
             self.assertEqual(r.normalizar_canal(canal), canal)
             self.assertTrue(self.calcular(canal)['requiere_revision'])
 
     def test_contado_ambos_aliases_y_precio_configurable(self):
-        for canal in ('POSGUAYANA', 'POSGUAYANA 26'):
+        for canal in ('POSGUAYANA', 'POSGUAYANA 26', 'POSGUAYANA26', 'PosGuayana26'):
             for equipo, precios, esperado in (
                 ('Castle Dynamo', None, 38.4), ('Zappy S1MINI2', None, 36),
                 ('Castle Dynamo', {'Castle Dynamo': 250}, 40),
@@ -37,6 +37,7 @@ class PosguayanaTests(unittest.TestCase):
                     resultado = self.calcular(canal, equipo=equipo, precios=precios)
                     self.assertEqual(resultado['monto_agente'], esperado)
                     self.assertEqual(resultado['monto_total'], esperado)
+                    self.assertIsNone(resultado['monto_banco'])
                     self.assertFalse(resultado['requiere_revision'])
                     self.assertEqual(resultado['monto_total'],
                                      self.calcular('GRANPRO', equipo=equipo, precios=precios)['monto_total'])
@@ -68,7 +69,7 @@ class PosguayanaTests(unittest.TestCase):
                          (10, 28.4, 38.4))
 
     def test_motor_y_textos_visibles_canonicos(self):
-        for canal in ('POSGUAYANA', 'POSGUAYANA 26'):
+        for canal in ('POSGUAYANA', 'POSGUAYANA 26', 'POSGUAYANA26', 'PosGuayana26'):
             datos = fila(CANAL=canal, ESTATUS='Pendiente', **{'ESTATUS CXC': 'AL CONTADO', '__ORIGEN': 'VENTAS_NUEVAS'})
             for par in p.PARES.values():
                 for campo in par:
@@ -76,24 +77,43 @@ class PosguayanaTests(unittest.TestCase):
             datos['MONTO TOTAL A PAGAR $'] = None
             resultado = r.aplicar_motor_comisiones(pd.DataFrame([datos]))
             self.assertEqual(resultado.at[0, 'MONTO COMISION AGENTE AUTORIZADO $'], 38.4)
-            self.assertEqual(resultado.at[0, 'VENDEDOR AGENTE AUTORIZADO'], 'POSGUAYANA')
-            self.assertEqual(resultado.at[0, 'CANAL'], 'POSGUAYANA')
+            self.assertEqual(resultado.at[0, 'VENDEDOR AGENTE AUTORIZADO'], 'PosGuayana26')
+            self.assertEqual(resultado.at[0, 'CANAL'], 'PosGuayana26')
         original = pd.DataFrame([fila(CANAL='POSGUAYANA 26', EQUIPO='Castle Dynamo',
                                      **{'VENDEDOR AGENTE AUTORIZADO': 'POSGUAYANA 26'})])
         esperado = original.copy(deep=True)
-        esperado[['CANAL', 'VENDEDOR AGENTE AUTORIZADO']] = 'POSGUAYANA'
+        esperado[['CANAL', 'VENDEDOR AGENTE AUTORIZADO']] = 'PosGuayana26'
         pd.testing.assert_frame_equal(estandarizar_textos_salida(original), esperado)
 
+    def test_jornada_posguayana26_asigna_banco_y_agente_por_separado(self):
+        from test_revision_manual import resultados
+        from jornadas_chats import analizar_chats, aplicar_chats
+        for alias in ('POSGUAYANA','POSGUAYANA 26','POSGUAYANA26','PosGuayana26'):
+            for equipo,total in (('CASTLE',20),('ZAPPY',25),('Pinpagos',15)):
+                r=resultados()
+                r['final'].loc[1,['CANAL','BANCO','EQUIPO','VENDEDOR AGENTE AUTORIZADO']]=[alias,'BANCO DEL TESORO',equipo,'']
+                e=analizar_chats([('ficticio.txt',b'Afiliado: 101\nTerminal: 1')])
+                nuevo,_=aplicar_chats(r,{},e)
+                fila=nuevo['final'].loc[1]
+                banco=7.5 if equipo=='Pinpagos' else 10
+                self.assertEqual(fila['MONTO COMISION BANCO $'],banco)
+                self.assertEqual(fila['MONTO COMISION AGENTE AUTORIZADO $'],total-banco)
+                self.assertEqual(fila['MONTO TOTAL A PAGAR $'],total)
+                self.assertEqual(fila['VENDEDOR AGENTE AUTORIZADO'],'PosGuayana26')
+                self.assertEqual(fila['VENDEDOR BANCO'],'BANCO DEL TESORO')
+
     def test_separador_un_archivo_dos_aliases_y_estructura_identica(self):
-        filas = [fila(CANAL=canal, **{'SERIAL': 'PRIMERO FICTICIO', 'SERIAL.1': '000123456789012'})
-                 for canal in ('POSGUAYANA', 'POSGUAYANA 26')]
+        filas = [fila(CANAL=canal, **{'VENDEDOR AGENTE AUTORIZADO': canal,
+                                    'SERIAL': 'PRIMERO FICTICIO', 'SERIAL.1': '000123456789012'})
+                 for canal in ('POSGUAYANA', 'POSGUAYANA 26', 'POSGUAYANA26', 'PosGuayana26')]
         resultado, libros = salidas(libro(filas))
         self.assertEqual(len(p.AGENTES), 12)
         self.assertEqual(resultado.archivos_generados, 1)
-        self.assertEqual(list(libros), ['Pago de comisiones POSGUAYANA 18-09-2026.xlsx'])
-        s = salida(libros, 'POSGUAYANA')
+        self.assertEqual(list(libros), ['Pago de comisiones PosGuayana26 18-09-2026.xlsx'])
+        s = salida(libros, 'PosGuayana26')
         self.assertEqual(next(iter(libros.values())).sheetnames, ['VENTAS'])
-        self.assertEqual(len(valores(s)), 2)
+        self.assertEqual(len(valores(s)), 4)
+        self.assertTrue(all(v['CANAL'] == v['VENDEDOR AGENTE AUTORIZADO'] == 'PosGuayana26' for v in valores(s)))
         self.assertTrue(all(v['SERIAL'] == '000123456789012' for v in valores(s)))
         headers = [c.value for c in s[1]]
         self.assertEqual(len(headers), 30)

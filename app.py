@@ -9,9 +9,11 @@ from procesamiento import (
 
 from reglas_comisiones import PRECIOS_BASE
 from revision_manual import preparar_descarga
+from jornadas_chats import analizar_chats, aplicar_chats
+from jornadas_chats_ui import cargar_chats
 
 
-VERSION_APP = "5.7-CORRECCION-REGRESIONES"
+VERSION_APP = "5.8-CHATS-EN-CARGA"
 
 
 st.set_page_config(
@@ -167,6 +169,8 @@ with col2:
         ],
         key="access_v3",
     )
+
+archivos_chats = cargar_chats()
 
 
 st.divider()
@@ -377,6 +381,8 @@ else:
         st.session_state.pop("excel_final_generado", None)
 
         try:
+            evidencia_chats = analizar_chats([(a.name, a.getvalue()) for a in archivos_chats]) if archivos_chats else None
+            estado_revision = {}
             with st.spinner(
                 "Procesando R34 por bloques, "
                 "cruzando Ventas, Comisiones "
@@ -401,6 +407,10 @@ else:
                     periodos_r34_manuales=periodos_manuales,
                 )
 
+                if evidencia_chats is not None:
+                    resultados, estado_revision = aplicar_chats(resultados, {}, evidencia_chats,
+                                                               st.session_state["precios"])
+
             faltantes = (
                 CLAVES_RESULTADO
                 - set(
@@ -422,7 +432,7 @@ else:
                 "resultados"
             ] = resultados
 
-            st.session_state["revision_nuevas"] = {}
+            st.session_state["revision_nuevas"] = estado_revision
             st.session_state.pop("r34_sin_periodo", None)
             st.session_state.pop("excel_final_generado", None)
             st.success(

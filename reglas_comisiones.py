@@ -92,7 +92,7 @@ def requiere_access_commerce(equipo):
 # Tarifas y equivalencias confirmadas. Los patrones de agentes son completos,
 # nunca búsquedas de subcadenas en nombres de personas u otras organizaciones.
 AGENTES_16 = frozenset({'GRANPRO', 'MULTITIENDA', 'INV TPOS', 'POSMARACAY',
-                       'POSMGTA', 'VENEPOS', 'VIRTUALNET', 'POSGUAYANA'})
+                       'POSMGTA', 'VENEPOS', 'VIRTUALNET', 'PosGuayana26'})
 TARIFAS_CONTADO = {'CENTRO TIPO II': Decimal('50'), 'REGION CENTRO': Decimal('25'),
                    'REGION ORIENTE': Decimal('25'), 'REGION OCCIDENTE': Decimal('25')}
 
@@ -113,7 +113,8 @@ def normalizar_agente(valor):
     aliases = {'CREDICARDPOSGRANPRO': 'GRANPRO', 'INVERSIONES TPOS': 'INV TPOS',
                'OCCIDENTE': 'REGION OCCIDENTE', 'ORIENTE': 'REGION ORIENTE',
                'CENTRO': 'REGION CENTRO', 'POSMGTA25': 'POSMGTA',
-               'POSMGTA25 CA': 'POSMGTA', 'POSGUAYANA 26': 'POSGUAYANA'}
+               'POSMGTA25 CA': 'POSMGTA', 'POSGUAYANA': 'PosGuayana26',
+               'POSGUAYANA 26': 'PosGuayana26', 'POSGUAYANA26': 'PosGuayana26'}
     if texto in aliases:
         return aliases[texto]
     if texto in AGENTES_16 or texto in TARIFAS_CONTADO:

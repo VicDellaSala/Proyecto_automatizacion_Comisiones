@@ -1,11 +1,14 @@
 """Evidencia textual de Jornada; no interpreta instrucciones de los chats."""
 import re
+from copy import deepcopy
 from io import BytesIO
 from zipfile import ZipFile, BadZipFile
 
+import pandas as pd
+
 from procesamiento import resolver_identidad_comisiones, normalizar_identificador
-from reglas_comisiones import normalizar_texto
-from revision_manual import incidencias, aplicar_decision, columna
+from reglas_comisiones import normalizar_texto, identificar_jornada, validar_cuadre
+from revision_manual import _revalidar, columna
 
 LIMITE = 20 * 1024 * 1024
 INICIO = re.compile(r'(?m)^\[?\d{1,2}/\d{1,2}/\d{2,4},?\s+\d{1,2}:\d{2}[^\n]*?(?: - |\] )')
@@ -93,30 +96,82 @@ def proponer_jornadas(resultados, estado, evidencia):
     df = resultados['final']
     identidad = resolver_identidad_comisiones(df)
     propuestas = []
-    for caso in incidencias(df, resultados['r34'], estado.get('decisiones'))[3]:
-        fila = df.loc[df['__ROW_ID'].eq(caso['row_id'])].iloc[0]
-        if normalizar_texto(fila[columna(df, 'ESTATUS')]) in {'PAGADO', 'DESINSTALADO'}:
+    banco_col = columna(df, 'BANCO')
+    jornada_col = columna(df, 'CANAL DE VENTA (JORNADA QUE PERTENECE)')
+    estatus_col = columna(df, 'ESTATUS')
+    # Paso 3 depende de la venta y del chat, no necesita recorrer el R34.
+    for _, fila in df.loc[df['__ORIGEN'].eq('VENTAS_NUEVAS')].iterrows():
+        banco, contexto = fila[banco_col], fila[jornada_col]
+        firma = (normalizar_texto(banco), normalizar_texto(contexto))
+        row_id = fila['__ROW_ID']
+        if (firma[0] not in {'TESORO', 'BANCO DEL TESORO'}
+                or identificar_jornada(banco, contexto) is True
+                or estado.get('decisiones', {}).get((3, row_id)) == firma
+                or normalizar_texto(fila[estatus_col]) in {'PAGADO', 'DESINSTALADO'}):
             continue
         a, t = (normalizar_identificador(fila[identidad[k]]) for k in ('afiliado', 'terminal'))
         if (a, t) in evidencia['pares']:
             decision = 'Jornada'
-        elif not a or not t or a in evidencia['ambiguos'] or evidencia['sin_identidad']:
+        elif not a or not t or a in evidencia['ambiguos']:
             decision = 'Revisión manual'
         else:
             decision = 'No Jornada'
-        propuestas.append(dict(row_id=caso['row_id'], decision=decision))
+        propuestas.append(dict(row_id=row_id, decision=decision, firma=firma))
     return propuestas
 
 
 def aplicar_chats(resultados, estado, evidencia, precios=None):
-    """Todo o nada: reutiliza las decisiones existentes y su validación de reparto."""
-    nuevo, nuevo_estado = resultados, estado
-    for propuesta in proponer_jornadas(resultados, estado, evidencia):
-        if propuesta['decision'] == 'Revisión manual':
-            continue
-        try:
-            nuevo, nuevo_estado = aplicar_decision(nuevo, nuevo_estado, 3, propuesta['row_id'],
-                'jornada' if propuesta['decision'] == 'Jornada' else 'mantener', precios=precios)
-        except ValueError as error:
-            raise ValueError(f"Venta ID {propuesta['row_id']}: {error}") from None
-    return nuevo, nuevo_estado
+    """Un recálculo para todas las Jornadas; cada reparto se valida por separado."""
+    propuestas = proponer_jornadas(resultados, estado, evidencia)
+    nuevo_estado = deepcopy(estado)
+    decisiones = nuevo_estado.setdefault('decisiones', {})
+    original = resultados['final']
+    trabajo = original.copy(deep=True)
+    ids = {p['row_id'] for p in propuestas if p['decision'] == 'Jornada'}
+    jornada_col = columna(original, 'CANAL DE VENTA (JORNADA QUE PERTENECE)')
+    montos = [columna(original, n) for n in ('MONTO COMISION BANCO $',
+              'MONTO COMISION VENDEDOR/FREELANCE $', 'MONTO COMISION AGENTE AUTORIZADO $',
+              'MONTO TOTAL A PAGAR $')]
+    if ids:
+        mascara = trabajo['__ROW_ID'].isin(ids)
+        trabajo.loc[mascara, jornada_col] = 'JORNADA BANCO DEL TESORO'
+        # Las mismas salidas que limpia la decisión manual de Jornada.
+        for c in montos + [columna(original, 'VENDEDOR BANCO'), columna(original, 'VENDEDOR / FREELANCE')]:
+            trabajo.loc[mascara, c] = None
+        trabajo = _revalidar(trabajo, ids, resultados, precios, nuevo_estado)
+    final = original.copy(deep=True)
+    aceptadas = set()
+    resumen = []
+    por_id = trabajo.set_index('__ROW_ID', drop=False)
+    for propuesta in propuestas:
+        row_id, decision = propuesta['row_id'], propuesta['decision']
+        motivo = ''
+        if decision == 'Jornada':
+            fila = por_id.loc[row_id]
+            cuadre = validar_cuadre(*(fila[c] for c in montos))
+            if pd.isna(fila[montos[-1]]) or cuadre['requiere_revision']:
+                decision = 'Revisión manual'
+                motivo = fila.get('__ADVERTENCIA_COMISION', '') or 'Reparto de Jornada incompleto.'
+            else:
+                aceptadas.add(row_id)
+                decisiones[(3, row_id)] = (propuesta['firma'][0], 'JORNADA BANCO DEL TESORO')
+        elif decision == 'No Jornada':
+            decisiones[(3, row_id)] = propuesta['firma']
+        else:
+            motivo = 'Afiliado o terminal incompletos/ambiguos en la evidencia.'
+        resumen.append({'ID venta nueva': row_id, 'Resultado': decision, 'Motivo': motivo})
+    # Copiar solo filas aceptadas: ni los fallos ni los históricos se modifican.
+    mascara = final['__ROW_ID'].isin(aceptadas)
+    if aceptadas:
+        for c in trabajo:
+            if c not in final:
+                final[c] = pd.Series(None, index=final.index, dtype=object)
+            actuales, valores = final.loc[mascara, c], trabajo.loc[mascara, c]
+            if (actuales.eq(valores).fillna(False) | (actuales.isna() & valores.isna())).all():
+                continue
+            final[c] = final[c].astype(object)
+            final.loc[mascara, c] = valores
+        final.attrs.update(trabajo.attrs)
+        nuevo_estado.setdefault('afectadas', set()).update(aceptadas)
+        nuevo_estado.setdefault('jornadas', set()).update(aceptadas)
+    return dict(resultados, final=final, resumen_chats=resumen), nuevo_estado

@@ -21,7 +21,7 @@ from reglas_comisiones import normalizar_canal, normalizar_texto, requiere_acces
 
 
 AGENTES = ('REGION CENTRO', 'REGION ORIENTE', 'REGION OCCIDENTE', 'CENTRO TIPO II',
-           'GRANPRO', 'MULTITIENDA', 'INV TPOS', 'POSMARACAY', 'POSMGTA', 'VENEPOS', 'VIRTUALNET', 'POSGUAYANA')
+           'GRANPRO', 'MULTITIENDA', 'INV TPOS', 'POSMARACAY', 'POSMGTA', 'VENEPOS', 'VIRTUALNET', 'PosGuayana26')
 REGIONALES = ('Alexander Pacheco', 'Ezequiel Zambrano', 'Luis Garcia', 'Liseth Villanueva', 'Jorge Milanes')
 BANCOS = ('TESORO', 'BANCARIBE')
 GRUPOS = {'AGENTES AUTORIZADOS': AGENTES, 'REGIONALES': REGIONALES, 'BANCOS': BANCOS}
@@ -248,6 +248,9 @@ def _excel(fuente, cabecera, filas, columnas, indice_access, indice_monto, meta)
         for nueva_col, vieja in enumerate(indices, 1):
             destino = s.cell(nueva_fila, nueva_col)
             _copiar_celda(celdas[vieja], destino, estilos)
+            if (columnas[nueva_col - 1][0] in {'CANAL', 'VENDEDOR AGENTE AUTORIZADO'}
+                    and normalizar_canal(destino.value) == 'PosGuayana26'):
+                destino.value = 'PosGuayana26'
             if vieja == indice_access:
                 destino.value = access
             elif vieja == indice_monto and celdas[vieja].value is not None and str(celdas[vieja].value).strip() not in ('', '-'):
